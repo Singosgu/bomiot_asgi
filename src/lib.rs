@@ -39,11 +39,8 @@ fn create_asgi_application() -> PyResult<PyObject> {
         // 创建路由列表
         let routes = PyList::empty(py);
         
-        // 添加 Django 路由 - 使用正确的Mount构造函数
         let mount_class = starlette_routing.getattr("Mount")?;
-        let django_mount = mount_class.call1(("/django", http_application))?;
-        routes.append(django_mount)?;
-        
+                
         // 添加 FastAPI 路由
         let fastapi_mount = mount_class.call1(("/fastapi", fastapi_app))?;
         routes.append(fastapi_mount)?;
@@ -53,6 +50,11 @@ fn create_asgi_application() -> PyResult<PyObject> {
         let flask_mount = mount_class.call1(("/flask", flask_wsgi))?;
         routes.append(flask_mount)?;
         
+        // 添加 Django 路由 - 使用正确的Mount构造函数
+        let django_mount = mount_class.call1(("/", http_application))?;
+        routes.append(django_mount)?;
+
+
         // 创建 Starlette 应用
         let starlette_class = starlette_applications.getattr("Starlette")?;
         let app_kwargs = PyDict::new(py);
