@@ -14,6 +14,8 @@ fn create_asgi_application() -> PyResult<PyObject> {
             .getattr("WSGIMiddleware")?;
         let importlib = py.import("importlib")?;
         let django_settings = py.import("django.conf")?.getattr("settings")?;
+        let base_middleware = py.import("starlette.middleware.base")?.getattr("BaseHTTPMiddleware")?;
+        let starlette_requests = py.import("starlette.requests")?.getattr("Request")?;
         
         // 获取 Django ASGI 应用
         let get_asgi_application = django_asgi.getattr("get_asgi_application")?;
@@ -54,12 +56,36 @@ fn create_asgi_application() -> PyResult<PyObject> {
         let django_mount = mount_class.call1(("/", http_application))?;
         routes.append(django_mount)?;
 
-
         // 创建 Starlette 应用
         let starlette_class = starlette_applications.getattr("Starlette")?;
         let app_kwargs = PyDict::new(py);
         app_kwargs.set_item("routes", routes)?;
         let application = starlette_class.call((), Some(app_kwargs))?;
+        
+        // 创建自定义中间件类
+        let middleware_code = r#"
+class CustomServerHeaderMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["Server"] = "Bomiot"
+        return response
+"#;
+        
+        // 执行中间件代码
+        let globals = PyDict::new(py);
+        globals.set_item("BaseHTTPMiddleware", base_middleware)?;
+        globals.set_item("Request", starlette_requests)?;
+        
+        let _ = py.run(middleware_code, Some(globals), None)?;
+        
+        // 获取中间件类
+        let middleware_class = globals.get_item("CustomServerHeaderMiddleware")
+            .ok_or(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Failed to get middleware class"))?;
+        
+        // 添加中间件到应用
+        let add_middleware_method = application.getattr("add_middleware")?;
+        let middleware_instance = middleware_class.call0()?;
+        add_middleware_method.call1((middleware_instance,))?;
         
         Ok(application.into())
     })
