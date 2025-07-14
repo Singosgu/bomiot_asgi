@@ -85,30 +85,24 @@ fn rust_send(py: Python, event: PyObject, send_obj: PyObject) -> PyResult<PyObje
 #[pyfunction]
 fn create_application() -> PyResult<PyObject> {
     Python::with_gil(|py| {
-        // 创建一个简单的 ASGI 应用
-        let asgi_app = py.eval(
-            r#"
-def asgi_app(scope, receive, send):
-    async def handle():
-        await send({
-            'type': 'http.response.start',
-            'status': 200,
-            'headers': [
-                (b'content-type', b'text/plain'),
-                (b'server', b'Bomiot-Rust')
-            ]
-        })
-        await send({
-            'type': 'http.response.body',
-            'body': b'Hello from Bomiot Rust ASGI!'
-        })
-    return handle()
-"#,
-            None,
-            None,
-        )?;
+        // 创建一个简单的同步 ASGI 应用
+        let asgi_app = pyo3::wrap_pyfunction!(simple_asgi_app, py)?;
         Ok(asgi_app.into())
     })
+}
+
+#[pyfunction]
+fn simple_asgi_app(py: Python, _scope: PyObject, _receive: PyObject, _send: PyObject) -> PyResult<PyObject> {
+    // 创建一个简单的响应
+    let response = PyDict::new(py);
+    response.set_item("status", 200)?;
+    response.set_item("headers", PyList::new(py, [
+        (PyBytes::new(py, b"content-type"), PyBytes::new(py, b"text/plain")),
+        (PyBytes::new(py, b"server"), PyBytes::new(py, b"Bomiot")),
+    ]))?;
+    response.set_item("body", PyBytes::new(py, b"Hello from Bomiot Rust ASGI!"))?;
+    
+    Ok(response.into())
 }
 
 #[pymodule]
