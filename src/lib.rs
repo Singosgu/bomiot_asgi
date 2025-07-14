@@ -1,28 +1,71 @@
 #![allow(non_local_definitions)]
 use pyo3::prelude::*;
-use pyo3::types::{PyString, PyList, PyDict};
+use pyo3::types::{PyString, PyDict, PyList, PyTuple};
+use pyo3::PyCell;
 
 #[pyclass]
-pub struct CustomServerHeaderMiddleware;
+pub struct CustomServerHeaderMiddleware {
+    app: PyObject,
+}
 
 #[pymethods]
 impl CustomServerHeaderMiddleware {
     #[new]
-    fn new() -> Self {
-        CustomServerHeaderMiddleware
+    fn new(app: PyObject) -> Self {
+        CustomServerHeaderMiddleware { app }
     }
 
-    fn dispatch(&self, py: Python, request: PyObject, call_next: PyObject) -> PyResult<PyObject> {
-        // 同步调用 call_next
-        let response = call_next.call1(py, (request,))?;
-        // 设置 Server 头
-        let response_ref = response.as_ref();
-        let headers = response_ref.getattr(py, "headers")?;
-        headers.call_method1(py, "__setitem__", (
-            PyString::new(py, "Server"),
-            PyString::new(py, "Bomiot"),
-        ))?;
-        Ok(response)
+    fn __call__(
+        &self,
+        py: Python,
+        scope: PyObject,
+        receive: PyObject,
+        send: PyObject,
+    ) -> PyResult<PyObject> {
+        let send_wrapper = PyCell::new(py, SendWrapper { send: send.clone_ref(py) })?.to_object(py);
+        let app = self.app.clone_ref(py);
+        app.call1(py, (scope, receive, send_wrapper))
+    }
+}
+
+#[pyclass]
+struct SendWrapper {
+    send: PyObject,
+}
+
+#[pymethods]
+impl SendWrapper {
+    fn __call__(&self, py: Python, message: PyObject) -> PyResult<PyObject> {
+        let msg = message.as_ref(py);
+        if let Ok(dict) = msg.downcast::<PyDict>() {
+            if let Some(msg_type) = dict.get_item("type")? {
+                if msg_type.eq(PyString::new(py, "http.response.start"))? {
+                    if let Some(headers) = dict.get_item("headers")? {
+                        if let Ok(headers_list) = headers.downcast::<PyList>() {
+                            let mut found = false;
+                            for (idx, item) in headers_list.iter().enumerate() {
+                                if let Ok(pair) = item.downcast::<PyTuple>() {
+                                    let name_any = pair.get_item(0)?;
+                                    if let Ok(name) = name_any.extract::<&[u8]>() {
+                                        if name.eq_ignore_ascii_case(b"server") {
+                                            let new_pair = PyTuple::new(py, &[name_any, PyString::new(py, "Bomiot")]);
+                                            headers_list.set_item(idx, new_pair)?;
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if !found {
+                                let new_pair = PyTuple::new(py, &[PyString::new(py, "server"), PyString::new(py, "Bomiot")]);
+                                headers_list.append(new_pair)?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.send.call1(py, (message,))
     }
 }
 
@@ -75,7 +118,7 @@ fn create_asgi_application(py: Python) -> PyResult<PyObject> {
 }
 
 #[pymodule]
-fn bomiot_asgi(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn bomiot_asgi(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<CustomServerHeaderMiddleware>()?;
     m.add_function(wrap_pyfunction!(create_asgi_application, m)?)?;
     let application = create_asgi_application(py)?;
