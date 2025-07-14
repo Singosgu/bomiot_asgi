@@ -85,9 +85,29 @@ fn rust_send(py: Python, event: PyObject, send_obj: PyObject) -> PyResult<PyObje
 #[pyfunction]
 fn create_application() -> PyResult<PyObject> {
     Python::with_gil(|py| {
-        // 返回 rust_send 函数
-        let rust_send_func = pyo3::wrap_pyfunction!(rust_send, py)?;
-        Ok(rust_send_func.into())
+        // 创建一个简单的 ASGI 应用
+        let asgi_app = py.eval(
+            r#"
+def asgi_app(scope, receive, send):
+    async def handle():
+        await send({
+            'type': 'http.response.start',
+            'status': 200,
+            'headers': [
+                (b'content-type', b'text/plain'),
+                (b'server', b'Bomiot-Rust')
+            ]
+        })
+        await send({
+            'type': 'http.response.body',
+            'body': b'Hello from Bomiot Rust ASGI!'
+        })
+    return handle()
+"#,
+            None,
+            None,
+        )?;
+        Ok(asgi_app.into())
     })
 }
 
