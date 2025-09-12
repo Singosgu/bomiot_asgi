@@ -10,8 +10,6 @@ fn create_asgi_application() -> PyResult<PyObject> {
         let django_asgi = py.import("django.core.asgi")?;
         let starlette_applications = py.import("starlette.applications")?;
         let starlette_routing = py.import("starlette.routing")?;
-        let headers_mod = py.import("headers")?;
-        let server_header_middleware = headers_mod.getattr("ServerHeaderMiddleware")?;
         
         // 获取 Django ASGI 应用
         let get_asgi_application = django_asgi.getattr("get_asgi_application")?;
@@ -33,7 +31,6 @@ fn create_asgi_application() -> PyResult<PyObject> {
         let application = starlette_class.call((), Some(app_kwargs))?;
 
         // 添加 ServerHeaderMiddleware 中间件
-        application.call_method1("add_middleware", (server_header_middleware,))?;
         
         Ok(application.into())
     })
