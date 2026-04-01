@@ -10,7 +10,7 @@ fn create_asgi_application() -> PyResult<PyObject> {
         let django_asgi = py.import("django.core.asgi")?;
         let starlette_applications = py.import("starlette.applications")?;
         let starlette_routing = py.import("starlette.routing")?;
-        let wsgi_middleware = py.import("starlette.middleware.wsgi")?
+        let wsgi_middleware = py.import("a2wsgi")?
             .getattr("WSGIMiddleware")?;
         let importlib = py.import("importlib")?;
         let django_settings = py.import("django.conf")?.getattr("settings")?;
