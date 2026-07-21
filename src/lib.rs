@@ -39,7 +39,13 @@ fn try_import_app(py: Python<'_>, module_path: &str, attr_name: &str) -> PyResul
 
 fn get_project_name(py: Python<'_>) -> PyResult<String> {
     let django_settings = py.import("django.conf")?.getattr("settings")?;
-    django_settings.getattr("PROJECT_NAME")?.extract()
+    let root_urlconf: String = django_settings.getattr("ROOT_URLCONF")?.extract()?;
+    let project_name = root_urlconf
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    Ok(project_name)
 }
 
 #[pyfunction]
