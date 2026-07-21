@@ -37,17 +37,6 @@ fn try_import_app(py: Python<'_>, module_path: &str, attr_name: &str) -> PyResul
     Ok(Some(app.into()))
 }
 
-fn get_project_name(py: Python<'_>) -> PyResult<String> {
-    let django_settings = py.import("django.conf")?.getattr("settings")?;
-    let root_urlconf: String = django_settings.getattr("ROOT_URLCONF")?.extract()?;
-    let project_name = root_urlconf
-        .split('.')
-        .next()
-        .unwrap_or("")
-        .to_string();
-    Ok(project_name)
-}
-
 #[pyfunction]
 fn create_asgi_application() -> PyResult<PyObject> {
     Python::with_gil(|py| {
@@ -61,13 +50,11 @@ fn create_asgi_application() -> PyResult<PyObject> {
         let get_asgi_application = django_asgi.getattr("get_asgi_application")?;
         let http_application = get_asgi_application.call0()?;
 
-        let project_name = get_project_name(py)?;
-
         let fastapi_app =
-            try_import_app(py, &format!("{}.fastapi_app.main", project_name), "fastapi_app")?;
+            try_import_app(py, "greaterwms.fastapi_app.main", "fastapi_app")?;
 
         let flask_app =
-            try_import_app(py, &format!("{}.flask_app.main", project_name), "flask_app")?;
+            try_import_app(py, "greaterwms.flask_app.main", "flask_app")?;
 
         let routes = PyList::empty(py);
         let mount_class = starlette_routing.getattr("Mount")?;
