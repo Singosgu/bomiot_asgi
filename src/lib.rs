@@ -86,16 +86,17 @@ fn create_asgi_application() -> PyResult<PyObject> {
     })
 }
 
-fn verify_key_from_file(py: Python<'_>, working_space: &str, filename: &str) -> PyResult<()> {
+fn verify_key_from_file(py: Python<'_>, working_space: &str, filename: &str, local_mac: &str, can_regenerate: bool) -> PyResult<()> {
     let os_path = py.import("os.path")?;
-    let exists: bool = os_path.call_method1("isfile", (format!("{}/{}", working_space, filename),))?.extract()?;
+    let file_path = format!("{}/{}", working_space, filename);
+    let exists: bool = os_path.call_method1("isfile", (&file_path,))?.extract()?;
 
     if !exists {
         return Ok(());
     }
 
     let importlib = py.import("importlib.util")?;
-    let spec = importlib.call_method1("spec_from_file_location", (filename, format!("{}/{}", working_space, filename)))?;
+    let spec = importlib.call_method1("spec_from_file_location", (filename, &file_path))?;
     let module = importlib.call_method1("module_from_spec", (spec,))?;
     spec.getattr("loader")?.call_method1("exec_module", (module,))?;
 
@@ -108,18 +109,51 @@ fn verify_key_from_file(py: Python<'_>, working_space: &str, filename: &str) -> 
     let verify_info = bomiot_token.getattr("verify_info")?;
     let result = verify_info.call1((key_val,))?;
 
-    py.import("builtins")?.call_method1("print", (format!("{}: {}", filename, result),))?;
+    let locals = PyDict::new(py);
+    locals.set_item("result", result)?;
+    locals.set_item("local_mac", local_mac)?;
+    locals.set_item("filename", filename)?;
+    locals.set_item("file_path", &file_path)?;
+    locals.set_item("bomiot_token", bomiot_token)?;
+    locals.set_item("can_regenerate", can_regenerate)?;
+
+    py.run(
+        "
+key_mac = ''
+if isinstance(result, dict):
+    key_mac = result.get('mac', '')
+elif hasattr(result, 'mac'):
+    key_mac = result.mac
+if not key_mac or key_mac.lower() != local_mac.lower():
+    print(f'{filename}: 网卡信息不一样')
+    if can_regenerate:
+        info = {'mac': local_mac}
+        new_key = bomiot_token.encrypt_info(info)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(f'KEY = \"{new_key}\"\\n')
+        print(f'{filename}: 已重新生成KEY')
+else:
+    print(f'{filename}: 网卡信息一致')
+        ",
+        None,
+        Some(locals),
+    )?;
 
     Ok(())
 }
 
 fn verify_keys() -> PyResult<()> {
     Python::with_gil(|py| {
+        let bomiot_token = py.import("bomiot_token")?;
+        let mac_obj = bomiot_token.call_method0("get_mac_address_py")?;
+        let local_mac: String = mac_obj.extract()?;
+        py.import("builtins")?.call_method1("print", (format!("MAC: {}", local_mac),))?;
+
         let settings = py.import("django.conf")?.getattr("settings")?;
         let working_space: String = settings.getattr("WORKING_SPACE")?.extract()?;
 
-        verify_key_from_file(py, &working_space, "auth_key.py")?;
-        verify_key_from_file(py, &working_space, "commercial.py")?;
+        verify_key_from_file(py, &working_space, "auth_key.py", &local_mac, true)?;
+        verify_key_from_file(py, &working_space, "commercial.py", &local_mac, false)?;
 
         Ok(())
     })
