@@ -86,9 +86,51 @@ fn create_asgi_application() -> PyResult<PyObject> {
     })
 }
 
+fn verify_key_from_file(py: Python<'_>, working_space: &str, filename: &str) -> PyResult<()> {
+    let os_path = py.import("os.path")?;
+    let exists: bool = os_path.call_method1("isfile", (format!("{}/{}", working_space, filename),))?.extract()?;
+
+    if !exists {
+        return Ok(());
+    }
+
+    let importlib = py.import("importlib.util")?;
+    let spec = importlib.call_method1("spec_from_file_location", (filename, format!("{}/{}", working_space, filename)))?;
+    let module = importlib.call_method1("module_from_spec", (spec,))?;
+    spec.getattr("loader")?.call_method1("exec_module", (module,))?;
+
+    let key_val = match module.getattr("KEY") {
+        Ok(k) => k,
+        Err(_) => return Ok(()),
+    };
+
+    let bomiot_token = py.import("bomiot_token")?;
+    let verify_info = bomiot_token.getattr("verify_info")?;
+    let result = verify_info.call1((key_val,))?;
+
+    py.import("builtins")?.call_method1("print", (format!("{}: {}", filename, result),))?;
+
+    Ok(())
+}
+
+fn verify_keys() -> PyResult<()> {
+    Python::with_gil(|py| {
+        let settings = py.import("django.conf")?.getattr("settings")?;
+        let working_space: String = settings.getattr("WORKING_SPACE")?.extract()?;
+
+        verify_key_from_file(py, &working_space, "auth_key.py")?;
+        verify_key_from_file(py, &working_space, "commercial.py")?;
+
+        Ok(())
+    })
+}
+
 #[pymodule]
 fn bomiot_asgi(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_asgi_application, m)?)?;
+
+    verify_keys()?;
+
     let application = create_asgi_application()?;
     m.add("application", application)?;
     Ok(())
