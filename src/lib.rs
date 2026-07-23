@@ -129,7 +129,7 @@ fn verify_keys() -> PyResult<()> {
 fn bomiot_asgi(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_asgi_application, m)?)?;
 
-    verify_keys()?;
+    let _ = verify_keys();
 
     let application = create_asgi_application()?;
     m.add("application", application)?;
