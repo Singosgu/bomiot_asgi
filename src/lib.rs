@@ -91,6 +91,9 @@ fn verify_key_from_file(py: Python<'_>, working_space: &str, filename: &str, loc
     let file_path = format!("{}/{}", working_space, filename);
     let exists: bool = os_path.call_method1("isfile", (&file_path,))?.extract()?;
 
+    let builtins = py.import("builtins")?;
+    builtins.call_method1("print", (format!("[DEBUG] 文件{}存在: {}", filename, exists),))?;
+
     if !exists {
         return Ok(());
     }
@@ -144,9 +147,16 @@ else:
     key_mac_list = []
     print(f'[DEBUG] key的mac类型未知, 设为空列表')
 
-print(f'[DEBUG] 本机原始MAC列表: {local_mac_list}')
+print(f'[DEBUG] 本机原始MAC: {local_mac_list}')
+print(f'[DEBUG] 本机MAC类型: {type(local_mac_list)}')
 
-local_mac_list_lower = [m.lower() for m in local_mac_list] if isinstance(local_mac_list, list) else []
+if isinstance(local_mac_list, list):
+    local_mac_list_lower = [m.lower() for m in local_mac_list]
+elif isinstance(local_mac_list, str):
+    mac_str = local_mac_list.strip().strip('[]')
+    local_mac_list_lower = [m.strip().lower() for m in mac_str.split(',') if m.strip()]
+else:
+    local_mac_list_lower = []
 print(f'[DEBUG] 本机MAC转小写后: {local_mac_list_lower}')
 
 print(f'[DEBUG] key的mac集合: {set(key_mac_list)}')
