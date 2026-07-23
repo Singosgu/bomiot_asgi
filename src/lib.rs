@@ -86,7 +86,7 @@ fn create_asgi_application() -> PyResult<PyObject> {
     })
 }
 
-fn verify_key_from_file(py: Python<'_>, working_space: &str, filename: &str, local_mac: &str, can_regenerate: bool) -> PyResult<()> {
+fn verify_key_from_file(py: Python<'_>, working_space: &str, filename: &str, local_mac_list: &PyAny, can_regenerate: bool) -> PyResult<()> {
     let os_path = py.import("os.path")?;
     let file_path = format!("{}/{}", working_space, filename);
     let exists: bool = os_path.call_method1("isfile", (&file_path,))?.extract()?;
@@ -111,7 +111,7 @@ fn verify_key_from_file(py: Python<'_>, working_space: &str, filename: &str, loc
 
     let locals = PyDict::new(py);
     locals.set_item("result", result)?;
-    locals.set_item("local_mac", local_mac)?;
+    locals.set_item("local_mac_list", local_mac_list)?;
     locals.set_item("filename", filename)?;
     locals.set_item("file_path", &file_path)?;
     locals.set_item("bomiot_token", bomiot_token)?;
@@ -119,19 +119,55 @@ fn verify_key_from_file(py: Python<'_>, working_space: &str, filename: &str, loc
 
     py.run(
         "
-key_mac = ''
+print(f'[DEBUG] 处理文件: {filename}')
+print(f'[DEBUG] 文件路径: {file_path}')
+
+key_mac_str = ''
 if isinstance(result, dict):
-    key_mac = result.get('mac', '')
+    key_mac_str = result.get('mac', '')
+    print(f'[DEBUG] 解密结果是dict, mac值: {key_mac_str}')
 elif hasattr(result, 'mac'):
-    key_mac = result.mac
-if not key_mac or key_mac.lower() != local_mac.lower():
+    key_mac_str = result.mac
+    print(f'[DEBUG] 解密结果是对象, mac值: {key_mac_str}')
+else:
+    print(f'[DEBUG] 解密结果中未找到mac字段')
+
+print(f'[DEBUG] key_mac_str类型: {type(key_mac_str)}')
+
+if isinstance(key_mac_str, list):
+    key_mac_list = [m.lower() for m in key_mac_str]
+    print(f'[DEBUG] key的mac是list, 共{len(key_mac_list)}个: {key_mac_list}')
+elif isinstance(key_mac_str, str):
+    key_mac_list = [m.strip().lower() for m in key_mac_str.split(',') if m.strip()]
+    print(f'[DEBUG] key的mac是str, 分割后共{len(key_mac_list)}个: {key_mac_list}')
+else:
+    key_mac_list = []
+    print(f'[DEBUG] key的mac类型未知, 设为空列表')
+
+print(f'[DEBUG] 本机原始MAC列表: {local_mac_list}')
+
+local_mac_list_lower = [m.lower() for m in local_mac_list] if isinstance(local_mac_list, list) else []
+print(f'[DEBUG] 本机MAC转小写后: {local_mac_list_lower}')
+
+print(f'[DEBUG] key的mac集合: {set(key_mac_list)}')
+print(f'[DEBUG] 本机mac集合: {set(local_mac_list_lower)}')
+
+matched = set(key_mac_list) == set(local_mac_list_lower) and len(key_mac_list) > 0
+print(f'[DEBUG] 比对结果: {matched}')
+
+if not matched:
     print(f'{filename}: 网卡信息不一样')
     if can_regenerate:
-        info = {'mac': local_mac}
+        print(f'[DEBUG] 开始重新生成KEY...')
+        info = {'mac': ','.join(local_mac_list_lower)}
+        print(f'[DEBUG] 加密信息: {info}')
         new_key = bomiot_token.encrypt_info(info)
+        print(f'[DEBUG] 新KEY长度: {len(new_key)}')
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(f'KEY = \"{new_key}\"\\n')
         print(f'{filename}: 已重新生成KEY')
+    else:
+        print(f'[DEBUG] 不允许重新生成')
 else:
     print(f'{filename}: 网卡信息一致')
         ",
@@ -144,17 +180,20 @@ else:
 
 fn verify_keys() -> PyResult<()> {
     Python::with_gil(|py| {
+        py.import("builtins")?.call_method1("print", ("[DEBUG] 开始执行verify_keys",))?;
         let bomiot_token = py.import("bomiot_token")?;
-        let mac_obj = bomiot_token.call_method0("get_mac_address_py")?;
-        let local_mac: String = mac_obj.extract()?;
-        py.import("builtins")?.call_method1("print", (format!("MAC: {}", local_mac),))?;
+        py.import("builtins")?.call_method1("print", ("[DEBUG] bomiot_token导入成功",))?;
+        let mac_list = bomiot_token.call_method0("get_mac_address_py")?;
+        py.import("builtins")?.call_method1("print", (format!("MAC: {:?}", mac_list),))?;
 
         let settings = py.import("django.conf")?.getattr("settings")?;
         let working_space: String = settings.getattr("WORKING_SPACE")?.extract()?;
+        py.import("builtins")?.call_method1("print", (format!("[DEBUG] WORKING_SPACE: {}", working_space),))?;
 
-        verify_key_from_file(py, &working_space, "auth_key.py", &local_mac, true)?;
-        verify_key_from_file(py, &working_space, "commercial.py", &local_mac, false)?;
+        verify_key_from_file(py, &working_space, "auth_key.py", mac_list, true)?;
+        verify_key_from_file(py, &working_space, "commercial.py", mac_list, false)?;
 
+        py.import("builtins")?.call_method1("print", ("[DEBUG] verify_keys执行完成",))?;
         Ok(())
     })
 }
