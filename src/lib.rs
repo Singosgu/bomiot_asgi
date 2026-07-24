@@ -143,19 +143,25 @@ fn verify_key_from_file(py: Python<'_>, working_space: &str, filename: &str, loc
 print(f'[DEBUG] 处理文件: {filename}')
 print(f'[DEBUG] 文件路径: {file_path}')
 
-stored_mac = ''
+stored_mac_str = ''
 if isinstance(result, tuple):
     if len(result) > 0:
-        stored_mac = str(result[0]).strip()
+        stored_mac_str = str(result[0]).strip()
     print(f'[DEBUG] 解密结果: {result}')
-    print(f'[DEBUG] 取出的MAC: {stored_mac}')
+    print(f'[DEBUG] key中MAC字符串: {stored_mac_str}')
 else:
     print(f'[DEBUG] 解密结果格式不对: {type(result)}')
 
-current_mac = str(local_mac_list).strip()
-print(f'[DEBUG] 当前本机MAC: {current_mac}')
+key_mac_set = {m.strip().upper() for m in stored_mac_str.split(',') if m.strip()}
+local_mac_set = {m.strip().upper() for m in local_mac_list if m.strip()}
 
-matched = stored_mac == current_mac
+print(f'[DEBUG] key的MAC集合({len(key_mac_set)}个): {key_mac_set}')
+print(f'[DEBUG] 本机MAC集合({len(local_mac_set)}个): {local_mac_set}')
+
+common = key_mac_set & local_mac_set
+print(f'[DEBUG] 共同MAC: {common}')
+
+matched = len(common) > 0
 print(f'[DEBUG] 比对结果: {matched}')
 
 if not matched:
