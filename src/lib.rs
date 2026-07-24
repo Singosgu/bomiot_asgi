@@ -99,18 +99,36 @@ fn verify_key_from_file(py: Python<'_>, working_space: &str, filename: &str, loc
     }
 
     let importlib = py.import("importlib.util")?;
+    builtins.call_method1("print", (format!("[DEBUG] {} 开始加载模块", filename),))?;
     let spec = importlib.call_method1("spec_from_file_location", (filename, &file_path))?;
     let module = importlib.call_method1("module_from_spec", (spec,))?;
     spec.getattr("loader")?.call_method1("exec_module", (module,))?;
+    builtins.call_method1("print", (format!("[DEBUG] {} 模块加载完成", filename),))?;
 
     let key_val = match module.getattr("KEY") {
-        Ok(k) => k,
-        Err(_) => return Ok(()),
+        Ok(k) => {
+            builtins.call_method1("print", (format!("[DEBUG] {} KEY值: {}", filename, k),))?;
+            k
+        }
+        Err(e) => {
+            builtins.call_method1("print", (format!("[DEBUG] {} 没有KEY属性: {}", filename, e),))?;
+            return Ok(());
+        }
     };
 
     let bomiot_token = py.import("bomiot_token")?;
     let verify_info = bomiot_token.getattr("verify_info")?;
-    let result = verify_info.call1((key_val,))?;
+    builtins.call_method1("print", (format!("[DEBUG] {} 开始调用verify_info", filename),))?;
+    let result = match verify_info.call1((key_val,)) {
+        Ok(r) => {
+            builtins.call_method1("print", (format!("[DEBUG] {} verify_info成功: {}", filename, r),))?;
+            r
+        }
+        Err(e) => {
+            builtins.call_method1("print", (format!("[DEBUG] {} verify_info失败: {}", filename, e),))?;
+            return Ok(());
+        }
+    };
 
     let locals = PyDict::new(py);
     locals.set_item("result", result)?;
