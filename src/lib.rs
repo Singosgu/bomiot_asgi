@@ -143,51 +143,19 @@ fn verify_key_from_file(py: Python<'_>, working_space: &str, filename: &str, loc
 print(f'[DEBUG] 处理文件: {filename}')
 print(f'[DEBUG] 文件路径: {file_path}')
 
-key_mac_str = ''
-if isinstance(result, dict):
-    key_mac_str = result.get('mac', '')
-    print(f'[DEBUG] 解密结果是dict, mac值: {key_mac_str}')
-elif isinstance(result, tuple):
-    print(f'[DEBUG] 解密结果是tuple, 长度: {len(result)}, 值: {result}')
+stored_mac = ''
+if isinstance(result, tuple):
     if len(result) > 0:
-        key_mac_str = result[0]
-        print(f'[DEBUG] 取tuple第一项作为mac: {key_mac_str}')
-    else:
-        print(f'[DEBUG] tuple为空')
-elif hasattr(result, 'mac'):
-    key_mac_str = result.mac
-    print(f'[DEBUG] 解密结果是对象, mac值: {key_mac_str}')
+        stored_mac = str(result[0]).strip()
+    print(f'[DEBUG] 解密结果: {result}')
+    print(f'[DEBUG] 取出的MAC: {stored_mac}')
 else:
-    print(f'[DEBUG] 解密结果中未找到mac字段')
+    print(f'[DEBUG] 解密结果格式不对: {type(result)}')
 
-print(f'[DEBUG] key_mac_str类型: {type(key_mac_str)}')
+current_mac = str(local_mac_list).strip()
+print(f'[DEBUG] 当前本机MAC: {current_mac}')
 
-if isinstance(key_mac_str, list):
-    key_mac_list = [m.lower() for m in key_mac_str]
-    print(f'[DEBUG] key的mac是list, 共{len(key_mac_list)}个: {key_mac_list}')
-elif isinstance(key_mac_str, str):
-    key_mac_list = [m.strip().lower() for m in key_mac_str.split(',') if m.strip()]
-    print(f'[DEBUG] key的mac是str, 分割后共{len(key_mac_list)}个: {key_mac_list}')
-else:
-    key_mac_list = []
-    print(f'[DEBUG] key的mac类型未知, 设为空列表')
-
-print(f'[DEBUG] 本机原始MAC: {local_mac_list}')
-print(f'[DEBUG] 本机MAC类型: {type(local_mac_list)}')
-
-if isinstance(local_mac_list, list):
-    local_mac_list_lower = [m.lower() for m in local_mac_list]
-elif isinstance(local_mac_list, str):
-    mac_str = local_mac_list.strip().strip('[]')
-    local_mac_list_lower = [m.strip().lower() for m in mac_str.split(',') if m.strip()]
-else:
-    local_mac_list_lower = []
-print(f'[DEBUG] 本机MAC转小写后: {local_mac_list_lower}')
-
-print(f'[DEBUG] key的mac集合: {set(key_mac_list)}')
-print(f'[DEBUG] 本机mac集合: {set(local_mac_list_lower)}')
-
-matched = set(key_mac_list) == set(local_mac_list_lower) and len(key_mac_list) > 0
+matched = stored_mac == current_mac
 print(f'[DEBUG] 比对结果: {matched}')
 
 if not matched:
@@ -195,10 +163,8 @@ if not matched:
     print(f'[DEBUG] can_regenerate: {can_regenerate}')
     if can_regenerate:
         print(f'[DEBUG] 开始重新生成KEY...')
-        info = {'mac': ','.join(local_mac_list_lower)}
-        print(f'[DEBUG] 加密信息: {info}')
         try:
-            new_key = bomiot_token.encrypt_info(info)
+            new_key = bomiot_token.encrypt_info()
             print(f'[DEBUG] 新KEY: {new_key}')
             print(f'[DEBUG] 准备写入文件: {file_path}')
             with open(file_path, 'w', encoding='utf-8') as f:
@@ -225,7 +191,7 @@ fn verify_keys() -> PyResult<()> {
         let bomiot_token = py.import("bomiot_token")?;
         py.import("builtins")?.call_method1("print", ("[DEBUG] bomiot_token导入成功",))?;
         let mac_list = bomiot_token.call_method0("get_mac_address_py")?;
-        py.import("builtins")?.call_method1("print", (format!("MAC: {:?}", mac_list),))?;
+        py.import("builtins")?.call_method1("print", (format!("[DEBUG] 本机MAC: {:?}", mac_list),))?;
 
         let settings = py.import("django.conf")?.getattr("settings")?;
         let working_space: String = settings.getattr("WORKING_SPACE")?.extract()?;
