@@ -147,6 +147,13 @@ key_mac_str = ''
 if isinstance(result, dict):
     key_mac_str = result.get('mac', '')
     print(f'[DEBUG] 解密结果是dict, mac值: {key_mac_str}')
+elif isinstance(result, tuple):
+    print(f'[DEBUG] 解密结果是tuple, 长度: {len(result)}, 值: {result}')
+    if len(result) > 0:
+        key_mac_str = result[0]
+        print(f'[DEBUG] 取tuple第一项作为mac: {key_mac_str}')
+    else:
+        print(f'[DEBUG] tuple为空')
 elif hasattr(result, 'mac'):
     key_mac_str = result.mac
     print(f'[DEBUG] 解密结果是对象, mac值: {key_mac_str}')
