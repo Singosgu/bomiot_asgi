@@ -79,54 +79,77 @@ fn create_asgi_application() -> PyResult<PyObject> {
         py.run(
             "
 import os
+import time
+import ipaddress
 import importlib.util
 import bomiot_token
 
-def do_verify():
+def is_private_ip(ip_str):
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local
+
+def parse_key_file(file_path):
+    if not os.path.isfile(file_path):
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location(os.path.basename(file_path), file_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        if not hasattr(module, 'KEY'):
+            return None
+        result = bomiot_token.verify_info(module.KEY)
+        if isinstance(result, tuple) and len(result) >= 2:
+            mac_str = str(result[0]).strip()
+            ts_str = str(result[1]).strip()
+            try:
+                timestamp = int(ts_str)
+            except (ValueError, TypeError):
+                timestamp = 0
+            return (mac_str, timestamp)
+        return None
+    except Exception as e:
+        print(f'解析{os.path.basename(file_path)}失败: {e}')
+        return None
+
+def mac_matches(stored_mac_str, local_mac_list):
+    key_mac_set = {m.strip().upper() for m in stored_mac_str.split(',') if m.strip()}
+    local_mac_set = {m.strip().upper() for m in local_mac_list if m.strip()}
+    return len(key_mac_set & local_mac_set) > 0
+
+def regenerate_auth_key(file_path):
+    try:
+        new_key = bomiot_token.encrypt_info()
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(f'KEY = \"{new_key}\"\\n')
+        print(f'auth_key.py: 已重新生成KEY')
+        return True
+    except Exception as e:
+        print(f'auth_key.py: 重新生成KEY失败: {e}')
+        return False
+
+def init_auth_key():
     from django.conf import settings
     working_space = settings.WORKING_SPACE
     local_mac_list = bomiot_token.get_mac_address_py()
-    commercial_ok = True
-
-    for filename, can_regenerate in [('auth_key.py', True), ('commercial.py', False)]:
-        file_path = os.path.join(working_space, filename)
-        if not os.path.isfile(file_path):
-            continue
-        try:
-            spec = importlib.util.spec_from_file_location(filename, file_path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            if not hasattr(module, 'KEY'):
-                continue
-            key_val = module.KEY
-            result = bomiot_token.verify_info(key_val)
-            if isinstance(result, tuple) and len(result) > 0:
-                stored_mac_str = str(result[0]).strip()
+    auth_key_path = os.path.join(working_space, 'auth_key.py')
+    if os.path.isfile(auth_key_path):
+        auth_data = parse_key_file(auth_key_path)
+        if auth_data is not None:
+            stored_mac_str, _ = auth_data
+            if mac_matches(stored_mac_str, local_mac_list):
+                print('auth_key.py: 网卡信息一致')
             else:
-                continue
-            key_mac_set = {m.strip().upper() for m in stored_mac_str.split(',') if m.strip()}
-            local_mac_set = {m.strip().upper() for m in local_mac_list if m.strip()}
-            common = key_mac_set & local_mac_set
-            matched = len(common) > 0
-            if matched:
-                print(f'{filename}: 网卡信息一致')
-            else:
-                print(f'{filename}: 网卡信息不一样')
-                if can_regenerate:
-                    try:
-                        new_key = bomiot_token.encrypt_info()
-                        with open(file_path, 'w', encoding='utf-8') as f:
-                            f.write(f'KEY = \"{new_key}\"\\n')
-                        print(f'{filename}: 已重新生成KEY')
-                    except Exception as e:
-                        print(f'{filename}: 重新生成KEY失败: {e}')
-                else:
-                    commercial_ok = False
-        except Exception as e:
-            print(f'{filename}: 验证异常: {e}')
-            if not can_regenerate:
-                commercial_ok = False
-    return commercial_ok
+                print('auth_key.py: 网卡信息不一样')
+                regenerate_auth_key(auth_key_path)
+        else:
+            print('auth_key.py: 解析失败，重新生成')
+            regenerate_auth_key(auth_key_path)
+    else:
+        print('auth_key.py: 文件不存在，生成新KEY')
+        regenerate_auth_key(auth_key_path)
 
 class VerifyMiddleware:
     def __init__(self, app):
@@ -156,18 +179,55 @@ class VerifyMiddleware:
 
         print(f'[访问] {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")} -> {real_ip}')
 
-        commercial_ok = do_verify()
-        if not commercial_ok:
+        from django.conf import settings
+        working_space = settings.WORKING_SPACE
+        local_mac_list = bomiot_token.get_mac_address_py()
+        now = int(time.time())
+
+        commercial_path = os.path.join(working_space, 'commercial.py')
+
+        if os.path.isfile(commercial_path):
+            commercial_data = parse_key_file(commercial_path)
+            if commercial_data is not None:
+                stored_mac_str, commercial_ts = commercial_data
+                if mac_matches(stored_mac_str, local_mac_list):
+                    print('commercial.py: 网卡信息一致')
+                    print(f'commercial.py: 过期时间戳={commercial_ts}, 当前时间戳={now}')
+                    if commercial_ts > now:
+                        print('commercial.py: 订阅有效，允许所有IP访问')
+                        await self.app(scope, receive, send)
+                        return
+                    else:
+                        print('commercial.py: 订阅已过期，仅允许内网IP访问')
+                        if is_private_ip(real_ip):
+                            await self.app(scope, receive, send)
+                            return
+                        else:
+                            from starlette.responses import PlainTextResponse
+                            response = PlainTextResponse('Forbidden', status_code=403)
+                            await response(scope, receive, send)
+                            return
+                else:
+                    print('commercial.py: 网卡信息不一样，进入免费模式')
+            else:
+                print('commercial.py: 解析失败，进入免费模式')
+        else:
+            print('免费模式：仅允许内网IP访问')
+
+        if is_private_ip(real_ip):
+            await self.app(scope, receive, send)
+            return
+        else:
             from starlette.responses import PlainTextResponse
             response = PlainTextResponse('Forbidden', status_code=403)
             await response(scope, receive, send)
             return
-
-        await self.app(scope, receive, send)
             ",
             None,
             None,
         )?;
+
+        py.run("init_auth_key()", None, None)?;
 
         let middleware_class = py.import("starlette.middleware")?.getattr("Middleware")?;
         let verify_middleware = py.eval("VerifyMiddleware", None, None)?;
