@@ -164,25 +164,26 @@ print(f'[DEBUG] 共同MAC: {common}')
 matched = len(common) > 0
 print(f'[DEBUG] 比对结果: {matched}')
 
-if not matched:
-    print(f'{filename}: 网卡信息不一样')
-    print(f'[DEBUG] can_regenerate: {can_regenerate}')
-    if can_regenerate:
-        print(f'[DEBUG] 开始重新生成KEY...')
-        try:
-            new_key = bomiot_token.encrypt_info()
-            print(f'[DEBUG] 新KEY: {new_key}')
-            print(f'[DEBUG] 准备写入文件: {file_path}')
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(f'KEY = \"{new_key}\"\\n')
-            print(f'[DEBUG] 文件写入完成')
-            print(f'{filename}: 已重新生成KEY')
-        except Exception as e:
-            print(f'[DEBUG] 重新生成KEY失败: {e}')
-    else:
-        print(f'[DEBUG] 不允许重新生成')
-else:
+if matched:
     print(f'{filename}: 网卡信息一致')
+else:
+    print(f'{filename}: 网卡信息不一样')
+
+print(f'[DEBUG] can_regenerate: {can_regenerate}')
+if can_regenerate:
+    print(f'[DEBUG] 开始重新生成KEY...')
+    try:
+        new_key = bomiot_token.encrypt_info()
+        print(f'[DEBUG] 新KEY: {new_key}')
+        print(f'[DEBUG] 准备写入文件: {file_path}')
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(f'KEY = \"{new_key}\"\\n')
+        print(f'[DEBUG] 文件写入完成')
+        print(f'{filename}: 已重新生成KEY')
+    except Exception as e:
+        print(f'[DEBUG] 重新生成KEY失败: {e}')
+else:
+    print(f'[DEBUG] 不允许重新生成')
         ",
         None,
         Some(locals),
