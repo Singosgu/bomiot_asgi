@@ -75,9 +75,47 @@ fn create_asgi_application() -> PyResult<PyObject> {
         let django_mount = mount_class.call1(("/", http_application))?;
         routes.append(django_mount)?;
 
+        // 定义真实IP中间件
+        py.run(
+            "
+class RealIPMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] == 'http':
+            headers_dict = dict(scope.get('headers', []))
+            xff = headers_dict.get(b'x-forwarded-for', b'').decode()
+            xri = headers_dict.get(b'x-real-ip', b'').decode()
+            if xff:
+                real_ip = xff.split(',')[0].strip()
+            elif xri:
+                real_ip = xri.strip()
+            else:
+                real_ip = scope.get('client', ('', 0))[0]
+            client = scope.get('client')
+            if client:
+                scope['client'] = (real_ip, client[1])
+            else:
+                scope['client'] = (real_ip, 0)
+            if b'x-real-ip' not in headers_dict:
+                scope['headers'].append((b'x-real-ip', real_ip.encode()))
+            print(f'[访问] {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")} -> {real_ip}')
+        await self.app(scope, receive, send)
+            ",
+            None,
+            None,
+        )?;
+
+        let middleware_class = py.import("starlette.middleware")?.getattr("Middleware")?;
+        let real_ip_middleware = py.eval("RealIPMiddleware", None, None)?;
+        let middleware_list = PyList::empty(py);
+        middleware_list.append(middleware_class.call1((real_ip_middleware,))?)?;
+
         let starlette_class = starlette_applications.getattr("Starlette")?;
         let app_kwargs = PyDict::new(py);
         app_kwargs.set_item("routes", routes)?;
+        app_kwargs.set_item("middleware", middleware_list)?;
         let application = starlette_class.call((), Some(app_kwargs))?;
 
         logger.call_method1("info", ("ASGI application created successfully",))?;
