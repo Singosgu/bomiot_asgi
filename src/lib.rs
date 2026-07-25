@@ -204,13 +204,14 @@ class VerifyMiddleware:
                             return
                         else:
                             from starlette.responses import PlainTextResponse
+                            print(f'[拦截] 订阅已过期，公网IP被拒绝: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
                             response = PlainTextResponse('Forbidden', status_code=403)
                             await response(scope, receive, send)
                             return
                 else:
-                    print('commercial.py: 网卡信息不一样，进入免费模式')
+                    print('[警告] commercial.py 的MAC与本机不匹配，授权未生效，已降级为免费模式')
             else:
-                print('commercial.py: 解析失败，进入免费模式')
+                print('[警告] commercial.py 解析失败，已降级为免费模式')
         else:
             print('免费模式：仅允许内网IP访问')
 
@@ -219,6 +220,7 @@ class VerifyMiddleware:
             return
         else:
             from starlette.responses import PlainTextResponse
+            print(f'[拦截] 免费模式仅允许内网IP访问，公网IP被拒绝: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
             response = PlainTextResponse('Forbidden', status_code=403)
             await response(scope, receive, send)
             return
