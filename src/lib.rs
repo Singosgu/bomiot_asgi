@@ -135,20 +135,18 @@ def init_auth_key():
     working_space = settings.WORKING_SPACE
     local_mac_list = bomiot_token.get_mac_address_py()
     auth_key_path = os.path.join(working_space, 'auth_key.py')
+    need_regenerate = False
     if os.path.isfile(auth_key_path):
         auth_data = parse_key_file(auth_key_path)
         if auth_data is not None:
             stored_mac_str, _ = auth_data
-            if mac_matches(stored_mac_str, local_mac_list):
-                print('auth_key.py: 网卡信息一致')
-            else:
-                print('auth_key.py: 网卡信息不一样')
-                regenerate_auth_key(auth_key_path)
+            if not mac_matches(stored_mac_str, local_mac_list):
+                need_regenerate = True
         else:
-            print('auth_key.py: 解析失败，重新生成')
-            regenerate_auth_key(auth_key_path)
+            need_regenerate = True
     else:
-        print('auth_key.py: 文件不存在，生成新KEY')
+        need_regenerate = True
+    if need_regenerate:
         regenerate_auth_key(auth_key_path)
 
 class VerifyMiddleware:
@@ -191,36 +189,32 @@ class VerifyMiddleware:
             if commercial_data is not None:
                 stored_mac_str, commercial_ts = commercial_data
                 if mac_matches(stored_mac_str, local_mac_list):
-                    print('commercial.py: 网卡信息一致')
-                    print(f'commercial.py: 过期时间戳={commercial_ts}, 当前时间戳={now}')
                     if commercial_ts > now:
-                        print('commercial.py: 订阅有效，允许所有IP访问')
                         await self.app(scope, receive, send)
                         return
                     else:
-                        print('commercial.py: 订阅已过期，仅允许内网IP访问')
                         if is_private_ip(real_ip):
                             await self.app(scope, receive, send)
                             return
                         else:
                             from starlette.responses import PlainTextResponse
-                            print(f'[拦截] 订阅已过期，公网IP被拒绝: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
+                            print(f'订阅已过期，公网IP被拒绝: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
                             response = PlainTextResponse('Forbidden', status_code=403)
                             await response(scope, receive, send)
                             return
                 else:
-                    print('[警告] commercial.py 的MAC与本机不匹配，授权未生效，已降级为免费模式')
+                    print('Commercial Key MAC地址不匹配，只能内网访问，需要外网访问请重新订阅')
             else:
-                print('[警告] commercial.py 解析失败，已降级为免费模式')
+                print('Commercial Key MAC地址不匹配，只能内网访问，需要外网访问请重新订阅')
         else:
-            print('免费模式：仅允许内网IP访问')
+            pass
 
         if is_private_ip(real_ip):
             await self.app(scope, receive, send)
             return
         else:
             from starlette.responses import PlainTextResponse
-            print(f'[拦截] 免费模式仅允许内网IP访问，公网IP被拒绝: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
+            print(f'免费模式仅允许内网IP访问，公网IP被拒绝: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
             response = PlainTextResponse('Forbidden', status_code=403)
             await response(scope, receive, send)
             return
