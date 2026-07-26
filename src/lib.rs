@@ -111,7 +111,7 @@ def parse_key_file(file_path):
             return (mac_str, timestamp)
         return None
     except Exception as e:
-        print(f'解析{os.path.basename(file_path)}失败: {e}')
+        print(f'[Warning] Failed to parse {os.path.basename(file_path)}: {e}')
         return None
 
 def mac_matches(stored_mac_str, local_mac_list):
@@ -124,10 +124,10 @@ def regenerate_auth_key(file_path):
         new_key = bomiot_token.encrypt_info()
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(f'KEY = \"{new_key}\"\\n')
-        print(f'auth_key.py: 已重新生成KEY')
+        print(f'[Warning] auth_key.py: KEY regenerated')
         return True
     except Exception as e:
-        print(f'auth_key.py: 重新生成KEY失败: {e}')
+        print(f'[Warning] auth_key.py: Failed to regenerate KEY: {e}')
         return False
 
 def init_auth_key():
@@ -175,7 +175,13 @@ class VerifyMiddleware:
         if b'x-real-ip' not in headers_dict:
             scope['headers'].append((b'x-real-ip', real_ip.encode()))
 
-        print(f'[访问] {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")} -> {real_ip}')
+        print(f'[Bomiot Request] {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")} -> {real_ip}')
+
+        path = scope.get('path', '')
+        static_prefixes = ('/favicon.ico', '/css/', '/js/', '/assets/', '/statics/', '/fonts/', '/icons/', '/static/', '/media/')
+        if any(path.startswith(prefix) for prefix in static_prefixes):
+            await self.app(scope, receive, send)
+            return
 
         from django.conf import settings
         working_space = settings.WORKING_SPACE
@@ -198,14 +204,14 @@ class VerifyMiddleware:
                             return
                         else:
                             from starlette.responses import PlainTextResponse
-                            print(f'订阅已过期，公网IP被拒绝: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
+                            print(f'[Warning] Subscription expired, public IP denied: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
                             response = PlainTextResponse('Forbidden', status_code=403)
                             await response(scope, receive, send)
                             return
                 else:
-                    print('Commercial Key MAC地址不匹配，只能内网访问，需要外网访问请重新订阅')
+                    print('[Warning] Commercial Key verification failed, intranet access only, please renew subscription for public IP access')
             else:
-                print('Commercial Key MAC地址不匹配，只能内网访问，需要外网访问请重新订阅')
+                print('[Warning] Commercial Key verification failed, intranet access only, please renew subscription for public IP access')
         else:
             pass
 
@@ -214,7 +220,7 @@ class VerifyMiddleware:
             return
         else:
             from starlette.responses import PlainTextResponse
-            print(f'免费模式仅允许内网IP访问，公网IP被拒绝: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
+            print(f'[Warning] Free mode allows intranet IP only, public IP denied: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
             response = PlainTextResponse('Forbidden', status_code=403)
             await response(scope, receive, send)
             return
