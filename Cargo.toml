@@ -1,10 +1,6 @@
 [package]
 name = "bomiot_asgi"
-<<<<<<< HEAD
 version = "0.5.45"
-=======
-version = "0.5.44"
->>>>>>> f66c908e5104468aa040b794e8a5a5ef2ed90362
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
