@@ -220,7 +220,7 @@ class VerifyMiddleware:
             return
         else:
             from starlette.responses import PlainTextResponse
-            print(f'[Warning] Free mode allows intranet IP only, public IP denied: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
+            print(f'[Warning] Community mode allows intranet IP only, public IP denied: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
             response = PlainTextResponse('Forbidden', status_code=403)
             await response(scope, receive, send)
             return
