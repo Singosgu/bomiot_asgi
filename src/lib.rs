@@ -80,16 +80,8 @@ fn create_asgi_application() -> PyResult<PyObject> {
             "
 import os
 import time
-import ipaddress
 import importlib.util
 import bomiot_token
-
-def is_private_ip(ip_str):
-    try:
-        ip = ipaddress.ip_address(ip_str)
-    except ValueError:
-        return False
-    return ip.is_private or ip.is_loopback or ip.is_link_local
 
 def parse_key_file(file_path):
     if not os.path.isfile(file_path):
@@ -124,13 +116,44 @@ def regenerate_auth_key(file_path):
         new_key = bomiot_token.encrypt_info()
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(f'KEY = \"{new_key}\"\\n')
-        print(f'[Warning] auth_key.py: KEY regenerated')
         return True
     except Exception as e:
-        print(f'[Warning] auth_key.py: Failed to regenerate KEY: {e}')
         return False
 
+def detect_nuitka_and_set_is_lan():
+    """检测是否为 Nuitka 打包环境，设置 IS_LAN 环境变量"""
+    is_nuitka = False
+    
+    # 方法1：检查 sys.compiled 属性 (Nuitka 会设置)
+    import sys
+    if getattr(sys, 'compiled', False):
+        is_nuitka = True
+    
+    # 方法2：检查当前模块是否有 __compiled__ 属性
+    if '__compiled__' in globals():
+        is_nuitka = True
+    
+    # 方法3：检查 sys.modules 中的模块是否有 __compiled__
+    if not is_nuitka:
+        for name, mod in list(sys.modules.items())[:50]:
+            if hasattr(mod, '__compiled__'):
+                is_nuitka = True
+                break
+    
+    # 方法4：检查 Nuitka 环境变量
+    if os.environ.get('NUITKA_ONEFILE') == '1':
+        is_nuitka = True
+    
+    # 设置 IS_LAN 环境变量
+    if is_nuitka:
+        os.environ['IS_LAN'] = 'true'
+    else:
+        os.environ['IS_LAN'] = 'false'
+
 def init_auth_key():
+    # 检测 Nuitka 环境并设置 IS_LAN
+    detect_nuitka_and_set_is_lan()
+    
     from django.conf import settings
     working_space = settings.WORKING_SPACE
     local_mac_list = bomiot_token.get_mac_address_py()
@@ -138,12 +161,12 @@ def init_auth_key():
     need_regenerate = False
     if os.path.isfile(auth_key_path):
         auth_data = parse_key_file(auth_key_path)
-        if auth_data is not None:
+        if auth_data is None:
+            need_regenerate = True
+        else:
             stored_mac_str, _ = auth_data
             if not mac_matches(stored_mac_str, local_mac_list):
                 need_regenerate = True
-        else:
-            need_regenerate = True
     else:
         need_regenerate = True
     if need_regenerate:
@@ -158,28 +181,14 @@ class VerifyMiddleware:
             await self.app(scope, receive, send)
             return
 
-        headers_dict = dict(scope.get('headers', []))
-        xff = headers_dict.get(b'x-forwarded-for', b'').decode()
-        xri = headers_dict.get(b'x-real-ip', b'').decode()
-        if xff:
-            real_ip = xff.split(',')[0].strip()
-        elif xri:
-            real_ip = xri.strip()
-        else:
-            real_ip = scope.get('client', ('', 0))[0]
-        client = scope.get('client')
-        if client:
-            scope['client'] = (real_ip, client[1])
-        else:
-            scope['client'] = (real_ip, 0)
-        if b'x-real-ip' not in headers_dict:
-            scope['headers'].append((b'x-real-ip', real_ip.encode()))
-
-        print(f'[Bomiot Request] {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")} -> {real_ip}')
-
         path = scope.get('path', '')
         static_prefixes = ('/favicon.ico', '/css/', '/js/', '/assets/', '/statics/', '/fonts/', '/icons/', '/static/', '/media/')
         if any(path.startswith(prefix) for prefix in static_prefixes):
+            await self.app(scope, receive, send)
+            return
+
+        is_lan = os.environ.get('IS_LAN', 'false') == 'true'
+        if not is_lan:
             await self.app(scope, receive, send)
             return
 
@@ -188,39 +197,37 @@ class VerifyMiddleware:
         local_mac_list = bomiot_token.get_mac_address_py()
         now = int(time.time())
 
-        commercial_path = os.path.join(working_space, 'commercial.py')
+        sponsor_path = os.path.join(working_space, 'sponsor.py')
 
-        if os.path.isfile(commercial_path):
-            commercial_data = parse_key_file(commercial_path)
-            if commercial_data is not None:
-                stored_mac_str, commercial_ts = commercial_data
+        if os.path.isfile(sponsor_path):
+            sponsor_data = parse_key_file(sponsor_path)
+            if sponsor_data is not None:
+                stored_mac_str, sponsor_ts = sponsor_data
                 if mac_matches(stored_mac_str, local_mac_list):
-                    if commercial_ts > now:
+                    if sponsor_ts > now:
                         await self.app(scope, receive, send)
                         return
                     else:
-                        if is_private_ip(real_ip):
-                            await self.app(scope, receive, send)
-                            return
-                        else:
-                            from starlette.responses import PlainTextResponse
-                            print(f'[Warning] Subscription expired, public IP denied: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
-                            response = PlainTextResponse('Forbidden', status_code=403)
-                            await response(scope, receive, send)
-                            return
+                        from starlette.responses import PlainTextResponse
+                        print('[Warning] sponsor Key expired, subscription required for LAN access')
+                        response = PlainTextResponse('Forbidden', status_code=403)
+                        await response(scope, receive, send)
+                        return
                 else:
-                    print('[Warning] Commercial Key verification failed, intranet access only, please renew subscription for public IP access')
+                    from starlette.responses import PlainTextResponse
+                    print('[Warning] sponsor Key verification failed, please renew subscription')
+                    response = PlainTextResponse('Forbidden', status_code=403)
+                    await response(scope, receive, send)
+                    return
             else:
-                print('[Warning] Commercial Key verification failed, intranet access only, please renew subscription for public IP access')
-        else:
-            pass
-
-        if is_private_ip(real_ip):
-            await self.app(scope, receive, send)
-            return
+                from starlette.responses import PlainTextResponse
+                print('[Warning] sponsor Key verification failed, please renew subscription')
+                response = PlainTextResponse('Forbidden', status_code=403)
+                await response(scope, receive, send)
+                return
         else:
             from starlette.responses import PlainTextResponse
-            print(f'[Warning] Community mode allows intranet IP only, public IP denied: {real_ip} {scope.get(\"method\", \"\")} {scope.get(\"path\", \"\")}')
+            print('[Warning] sponsor Key not found, subscription required for LAN access')
             response = PlainTextResponse('Forbidden', status_code=403)
             await response(scope, receive, send)
             return
