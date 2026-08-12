@@ -121,7 +121,7 @@ def regenerate_auth_key(file_path):
         return False
 
 def detect_nuitka_and_set_is_lan():
-    """检测是否为 Nuitka 打包环境，设置 IS_LAN 环境变量"""
+    '''检测是否为 Nuitka 打包环境，设置 IS_LAN 环境变量'''
     is_nuitka = False
     
     # 方法1：检查 sys.compiled 属性 (Nuitka 会设置)
