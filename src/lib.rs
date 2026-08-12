@@ -182,8 +182,7 @@ class VerifyMiddleware:
             return
 
         path = scope.get('path', '')
-        static_prefixes = ('/favicon.ico', '/css/', '/js/', '/assets/', '/statics/', '/fonts/', '/icons/', '/static/', '/media/')
-        if any(path.startswith(prefix) for prefix in static_prefixes):
+        if path == '/' or path == '/favicon.ico' or any(path.startswith(prefix) for prefix in ('/css/', '/js/', '/assets/', '/statics/', '/fonts/', '/icons/', '/static/', '/media/')):
             await self.app(scope, receive, send)
             return
 
