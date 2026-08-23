@@ -83,16 +83,11 @@ import time
 import importlib.util
 import bomiot_token
 
-def parse_key_file(file_path):
-    if not os.path.isfile(file_path):
+def parse_key_attr(module, attr_name):
+    if not hasattr(module, attr_name):
         return None
     try:
-        spec = importlib.util.spec_from_file_location(os.path.basename(file_path), file_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        if not hasattr(module, 'KEY'):
-            return None
-        result = bomiot_token.verify_info(module.KEY)
+        result = bomiot_token.verify_info(getattr(module, attr_name))
         if isinstance(result, tuple) and len(result) >= 2:
             mac_str = str(result[0]).strip()
             ts_str = str(result[1]).strip()
@@ -102,20 +97,85 @@ def parse_key_file(file_path):
                 timestamp = 0
             return (mac_str, timestamp)
         return None
+    except Exception:
+        return None
+
+def parse_key_file(file_path):
+    if not os.path.isfile(file_path):
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location(os.path.basename(file_path), file_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        community_data = parse_key_attr(module, 'COMMUNITY_KEY')
+        sponsor_data = parse_key_attr(module, 'SPONSOR_KEY')
+        if community_data is None and sponsor_data is None:
+            return None
+        return (community_data, sponsor_data)
     except Exception as e:
         print(f'[Warning] Failed to parse {os.path.basename(file_path)}: {e}')
         return None
 
-def mac_matches(stored_mac_str, local_mac_list):
-    key_mac_set = {m.strip().upper() for m in stored_mac_str.split(',') if m.strip()}
-    local_mac_set = {m.strip().upper() for m in local_mac_list if m.strip()}
-    return len(key_mac_set & local_mac_set) > 0
+def read_raw_keys(file_path):
+    '''读取 auth_key.py 中的 COMMUNITY_KEY 和 SPONSOR_KEY 原始字符串'''
+    if not os.path.isfile(file_path):
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location(os.path.basename(file_path), file_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        community_key = getattr(module, 'COMMUNITY_KEY', None)
+        sponsor_key = getattr(module, 'SPONSOR_KEY', None)
+        if community_key is None and sponsor_key is None:
+            return None
+        return (str(community_key) if community_key else '', str(sponsor_key) if sponsor_key else '')
+    except Exception as e:
+        print(f'[Warning] Failed to read raw keys from {os.path.basename(file_path)}: {e}')
+        return None
+
+def can_reach_bomiot_server():
+    '''快速检测 bomiot.com 是否可达（无网卡/断网时快速失败）'''
+    import socket
+    try:
+        sock = socket.create_connection(('www.bomiot.com', 443), timeout=2)
+        sock.close()
+        return True
+    except Exception:
+        return False
+
+def check_auth_via_bomiot_server(community_key, sponsor_key):
+    '''向 bomiot.com 发送认证请求，返回 (success, expired_timestamp)'''
+    import json
+    import urllib.request
+    try:
+        payload = json.dumps({
+            'COMMUNITY_KEY': community_key,
+            'SPONSOR_KEY': sponsor_key,
+        }).encode('utf-8')
+        req = urllib.request.Request(
+            'https://www.bomiot.com/auth/',
+            data=payload,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode('utf-8')
+            data = json.loads(body)
+            expired = data.get('expired', 0)
+            try:
+                expired = int(expired)
+            except (ValueError, TypeError):
+                expired = 0
+            return (True, expired)
+    except Exception:
+        return (False, 0)
 
 def regenerate_auth_key(file_path):
     try:
-        new_key = bomiot_token.encrypt_info()
+        community_key, sponsor_key = bomiot_token.encrypt_info()
         with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(f'KEY = \"{new_key}\"\\n')
+            f.write(f'COMMUNITY_KEY = \"{community_key}\"\\n')
+            f.write(f'SPONSOR_KEY = \"{sponsor_key}\"\\n')
         return True
     except Exception as e:
         return False
@@ -129,18 +189,14 @@ def detect_nuitka_and_set_is_lan():
     if getattr(sys, 'compiled', False):
         is_nuitka = True
     
-    # 方法2：检查当前模块是否有 __compiled__ 属性
-    if '__compiled__' in globals():
-        is_nuitka = True
-    
-    # 方法3：检查 sys.modules 中的模块是否有 __compiled__
+    # 方法2：检查 sys.modules 中的模块是否有 __compiled__
     if not is_nuitka:
         for name, mod in list(sys.modules.items())[:50]:
             if hasattr(mod, '__compiled__'):
                 is_nuitka = True
                 break
     
-    # 方法4：检查 Nuitka 环境变量
+    # 方法3：检查 Nuitka 环境变量
     if os.environ.get('NUITKA_ONEFILE') == '1':
         is_nuitka = True
     
@@ -151,26 +207,49 @@ def detect_nuitka_and_set_is_lan():
         os.environ['IS_LAN'] = 'false'
 
 def init_auth_key():
-    # 检测 Nuitka 环境并设置 IS_LAN
     detect_nuitka_and_set_is_lan()
-    
+
     from django.conf import settings
     working_space = settings.WORKING_SPACE
-    local_mac_list = bomiot_token.get_mac_address_py()
     auth_key_path = os.path.join(working_space, 'auth_key.py')
-    need_regenerate = False
-    if os.path.isfile(auth_key_path):
-        auth_data = parse_key_file(auth_key_path)
-        if auth_data is None:
-            need_regenerate = True
-        else:
-            stored_mac_str, _ = auth_data
-            if not mac_matches(stored_mac_str, local_mac_list):
-                need_regenerate = True
+    # 启动时发送一次 bomiot.com 认证请求，设置 AUTHED
+    is_lan = os.environ.get('IS_LAN', 'false') == 'true'
+    if not is_lan:
+        os.environ['AUTHED'] = 'true'
     else:
-        need_regenerate = True
-    if need_regenerate:
-        regenerate_auth_key(auth_key_path)
+        need_regenerate = False
+        if os.path.isfile(auth_key_path):
+            auth_data = parse_key_file(auth_key_path)
+            if auth_data is None:
+                need_regenerate = True
+            else:
+                community_data, sponsor_data = auth_data
+                if community_data is None or sponsor_data is None:
+                    need_regenerate = True
+        else:
+            need_regenerate = True
+        if need_regenerate:
+            regenerate_auth_key(auth_key_path)
+        if os.path.isfile(auth_key_path):
+            raw_keys = read_raw_keys(auth_key_path)
+            if raw_keys is not None:
+                community_key, sponsor_key = raw_keys
+                if can_reach_bomiot_server():
+                    ok, expired_ts = check_auth_via_bomiot_server(community_key, sponsor_key)
+                    if ok:
+                        now_ts = int(time.time())
+                        if expired_ts > now_ts:
+                            os.environ['AUTHED'] = 'true'
+                        else:
+                            os.environ['AUTHED'] = 'false'
+                    else:
+                        os.environ['AUTHED'] = 'true'
+                else:
+                    os.environ['AUTHED'] = 'true'
+            else:
+                os.environ['AUTHED'] = 'false'
+        else:
+            os.environ['AUTHED'] = 'true'
 
 class VerifyMiddleware:
     def __init__(self, app):
@@ -182,58 +261,19 @@ class VerifyMiddleware:
             return
 
         path = scope.get('path', '')
-        if path == '/' or path == '/favicon.ico' or any(path.startswith(prefix) for prefix in ('/css/', '/js/', '/assets/', '/statics/', '/fonts/', '/icons/', '/static/', '/media/')):
+        if path == '/' or path == '/favicon.ico' or any(path.startswith(prefix) for prefix in ('/css/', '/js/', '/assets/', '/statics/', '/fonts/', '/icons/', '/static/', '/media/', '/projectlist/', '/md/')):
             await self.app(scope, receive, send)
             return
 
-        is_lan = os.environ.get('IS_LAN', 'false') == 'true'
-        if not is_lan:
+        if os.environ.get('AUTHED', 'false') == 'true':
             await self.app(scope, receive, send)
             return
 
-        from django.conf import settings
-        working_space = settings.WORKING_SPACE
-        local_mac_list = bomiot_token.get_mac_address_py()
-        now = int(time.time())
-
-        sponsor_path = os.path.join(working_space, 'sponsor.py')
-
-        if os.path.isfile(sponsor_path):
-            sponsor_data = parse_key_file(sponsor_path)
-            if sponsor_data is not None:
-                stored_mac_str, sponsor_ts = sponsor_data
-                if mac_matches(stored_mac_str, local_mac_list):
-                    if sponsor_ts > now:
-                        await self.app(scope, receive, send)
-                        return
-                    else:
-                        from starlette.responses import PlainTextResponse
-                        print('[Warning] sponsor Key expired, subscription required for LAN access')
-                        response = PlainTextResponse('Forbidden', status_code=403)
-                        await response(scope, receive, send)
-                        return
-                else:
-                    from starlette.responses import PlainTextResponse
-                    print('[Warning] sponsor Key verification failed, please renew subscription')
-                    response = PlainTextResponse('Forbidden', status_code=403)
-                    await response(scope, receive, send)
-                    return
-            else:
-                from starlette.responses import PlainTextResponse
-                print('[Warning] sponsor Key verification failed, please renew subscription')
-                response = PlainTextResponse('Forbidden', status_code=403)
-                await response(scope, receive, send)
-                return
-        else:
-            from starlette.responses import PlainTextResponse
-            print('[Warning] sponsor Key not found, subscription required for LAN access')
-            response = PlainTextResponse('Forbidden', status_code=403)
-            await response(scope, receive, send)
-            return
-            ",
-            None,
-            None,
-        )?;
+        from starlette.responses import JSONResponse
+        response = JSONResponse({'detail': 'Sponsorship has expired'}, status_code=200)
+        await response(scope, receive, send)
+    "
+    , None, None)?;
 
         py.run("init_auth_key()", None, None)?;
 
