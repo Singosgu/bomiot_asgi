@@ -133,16 +133,6 @@ def read_raw_keys(file_path):
         print(f'[Warning] Failed to read raw keys from {os.path.basename(file_path)}: {e}')
         return None
 
-def can_reach_bomiot_server():
-    '''快速检测 127.0.0.1:8000 是否可达（无网卡/断网时快速失败）'''
-    import socket
-    try:
-        sock = socket.create_connection(('127.0.0.1', 8000), timeout=2)
-        sock.close()
-        return True
-    except Exception:
-        return False
-
 def check_auth_via_bomiot_server(community_key, sponsor_key):
     '''向 127.0.0.1:8000 发送认证请求，返回 (success, expired_timestamp)'''
     import requests
@@ -226,16 +216,13 @@ def init_auth_key():
             raw_keys = read_raw_keys(auth_key_path)
             if raw_keys is not None:
                 community_key, sponsor_key = raw_keys
-                if can_reach_bomiot_server():
-                    ok, expired_ts = check_auth_via_bomiot_server(community_key, sponsor_key)
-                    if ok:
-                        now_ts = int(time.time())
-                        if expired_ts > now_ts:
-                            os.environ['AUTHED'] = 'true'
-                        else:
-                            os.environ['AUTHED'] = 'false'
-                    else:
+                ok, expired_ts = check_auth_via_bomiot_server(community_key, sponsor_key)
+                if ok:
+                    now_ts = int(time.time())
+                    if expired_ts > now_ts:
                         os.environ['AUTHED'] = 'true'
+                    else:
+                        os.environ['AUTHED'] = 'false'
                 else:
                     os.environ['AUTHED'] = 'true'
             else:
