@@ -137,7 +137,7 @@ def can_reach_bomiot_server():
     '''快速检测 bomiot.com 是否可达（无网卡/断网时快速失败）'''
     import socket
     try:
-        sock = socket.create_connection(('www.bomiot.com', 443), timeout=2)
+        sock = socket.create_connection(('127.0.0.1:8000', 443), timeout=2)
         sock.close()
         return True
     except Exception:
@@ -153,7 +153,7 @@ def check_auth_via_bomiot_server(community_key, sponsor_key):
             'SPONSOR_KEY': sponsor_key,
         }).encode('utf-8')
         req = urllib.request.Request(
-            'https://www.bomiot.com/auth/',
+            'https://127.0.0.1:8000/auth/',
             data=payload,
             headers={'Content-Type': 'application/json'},
             method='POST'
