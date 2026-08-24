@@ -134,39 +134,31 @@ def read_raw_keys(file_path):
         return None
 
 def can_reach_bomiot_server():
-    '''快速检测 bomiot.com 是否可达（无网卡/断网时快速失败）'''
+    '''快速检测 127.0.0.1:8000 是否可达（无网卡/断网时快速失败）'''
     import socket
     try:
-        sock = socket.create_connection(('127.0.0.1:8000', 443), timeout=2)
+        sock = socket.create_connection(('127.0.0.1', 8000), timeout=2)
         sock.close()
         return True
     except Exception:
         return False
 
 def check_auth_via_bomiot_server(community_key, sponsor_key):
-    '''向 bomiot.com 发送认证请求，返回 (success, expired_timestamp)'''
-    import json
-    import urllib.request
+    '''向 127.0.0.1:8000 发送认证请求，返回 (success, expired_timestamp)'''
+    import requests
     try:
-        payload = json.dumps({
-            'COMMUNITY_KEY': community_key,
-            'SPONSOR_KEY': sponsor_key,
-        }).encode('utf-8')
-        req = urllib.request.Request(
-            'https://127.0.0.1:8000/auth/',
-            data=payload,
-            headers={'Content-Type': 'application/json'},
-            method='POST'
+        resp = requests.post(
+            'http://127.0.0.1:8000/auth/',
+            json={'COMMUNITY_KEY': community_key, 'SPONSOR_KEY': sponsor_key},
+            timeout=10
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            body = resp.read().decode('utf-8')
-            data = json.loads(body)
-            expired = data.get('expired', 0)
-            try:
-                expired = int(expired)
-            except (ValueError, TypeError):
-                expired = 0
-            return (True, expired)
+        data = resp.json()
+        expired = data.get('expired', 0)
+        try:
+            expired = int(expired)
+        except (ValueError, TypeError):
+            expired = 0
+        return (True, expired)
     except Exception:
         return (False, 0)
 
