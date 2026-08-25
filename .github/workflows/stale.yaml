@@ -13,7 +13,7 @@ jobs:
     runs-on: macos-latest
     strategy:
       matrix:
-        python-version: ["3.11"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -32,13 +32,13 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           args: --release --target universal2-apple-darwin --out dist
-        
+
       - name: List wheels
         run: ls -lh dist/
-        
+
       - name: Install wheel (macOS)
         run: uv pip install --force-reinstall dist/*.whl
-        
+
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -48,7 +48,7 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        python-version: ["3.11"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
         target: [x64]
     steps:
       - uses: actions/checkout@v4
@@ -73,7 +73,7 @@ jobs:
           }
           echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
           echo "OPENSSL_NO_VENDOR=1" | Out-File -FilePath $env:GITHUB_ENV -Append
-      
+
       - uses: dtolnay/rust-toolchain@stable
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -89,7 +89,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
         target: [x86_64]
     steps:
       - uses: actions/checkout@v4
@@ -98,12 +98,12 @@ jobs:
         uses: astral-sh/setup-uv@v3
         with:
           version: "latest"
-      
+
       - name: Find openssl.pc
         run: |
           find /usr -name "openssl.pc"
           pkg-config --libs --cflags openssl
-      
+
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -146,7 +146,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv

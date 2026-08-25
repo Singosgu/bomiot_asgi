@@ -128,6 +128,7 @@ def check_auth_via_bomiot_server(community_key, sponsor_key):
         resp = requests.post(
             'http://127.0.0.1:8000/auth/',
             json={'COMMUNITY_KEY': community_key, 'SPONSOR_KEY': sponsor_key},
+            headers={'Authed': 'Bomiot'},
             timeout=10
         )
         data = resp.json()
@@ -155,6 +156,7 @@ def _fire_auth_post_background(timeout=2):
         _req.post(
             'http://127.0.0.1:8000/auth/',
             json={'COMMUNITY_KEY': community_key, 'SPONSOR_KEY': sponsor_key},
+            headers={'Authed': 'Bomiot'},
             timeout=timeout
         )
     except Exception:
