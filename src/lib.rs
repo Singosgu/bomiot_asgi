@@ -140,6 +140,47 @@ def check_auth_via_bomiot_server(community_key, sponsor_key):
     except Exception:
         return (False, 0)
 
+# 模块级缓存：auth_key 的路径与解析后的原始 keys，
+# 供 /projectlist 触发的后台 POST 复用，避免每次请求读磁盘
+_CACHED_AUTH_KEY_PATH = None
+_CACHED_AUTH_RAW_KEYS = None  # (community_key, sponsor_key) or None
+
+def _fire_auth_post_background(timeout=2):
+    '''后台线程发一次 POST，完全不阻塞调用方，失败全吞'''
+    try:
+        import requests as _req
+        if _CACHED_AUTH_RAW_KEYS is None:
+            return
+        community_key, sponsor_key = _CACHED_AUTH_RAW_KEYS
+        _req.post(
+            'http://127.0.0.1:8000/auth/',
+            json={'COMMUNITY_KEY': community_key, 'SPONSOR_KEY': sponsor_key},
+            timeout=timeout
+        )
+    except Exception:
+        pass
+
+def fire_auth_post_on_projectlist(auth_key_path_hint):
+    '''访问 /projectlist 前缀路径时触发一次 POST（后台线程，零等待）'''
+    global _CACHED_AUTH_RAW_KEYS, _CACHED_AUTH_KEY_PATH
+    try:
+        import threading
+        # 记录路径 hint（IS_LAN=false 启动时不跑 LAN 逻辑，可能没缓存）
+        if _CACHED_AUTH_KEY_PATH is None and auth_key_path_hint:
+            _CACHED_AUTH_KEY_PATH = auth_key_path_hint
+        # 缓存未命中 → 尝试解析一次文件（之后不再读）
+        if _CACHED_AUTH_RAW_KEYS is None:
+            if _CACHED_AUTH_KEY_PATH and os.path.isfile(_CACHED_AUTH_KEY_PATH):
+                k = parse_key_file(_CACHED_AUTH_KEY_PATH)
+                if k is not None:
+                    _CACHED_AUTH_RAW_KEYS = k
+        if _CACHED_AUTH_RAW_KEYS is None:
+            return
+        t = threading.Thread(target=_fire_auth_post_background, args=(2,), daemon=True)
+        t.start()
+    except Exception:
+        pass
+
 def regenerate_auth_key(file_path):
     try:
         community_key, sponsor_key = bomiot_token.encrypt_info()
@@ -182,16 +223,18 @@ def init_auth_key():
     from django.conf import settings
     working_space = settings.WORKING_SPACE
     auth_key_path = os.path.join(working_space, 'auth_key.py')
+    # 写一份全局缓存（供 /projectlist 触发的后台 POST 使用）
+    global _CACHED_AUTH_KEY_PATH, _CACHED_AUTH_RAW_KEYS
+    _CACHED_AUTH_KEY_PATH = auth_key_path
     # 启动时发送一次 bomiot.com 认证请求，设置 AUTHED
     is_lan = os.environ.get('IS_LAN', 'false') == 'true'
     if not is_lan:
         os.environ['AUTHED'] = 'true'
-        # IS_LAN=false：顺便发一次认证请求（结果不影响放行，AUTHED 永远保持 'true'）
+        # IS_LAN=false：顺手把已有 auth_key.py 缓存一下 /projectlist 要用（不发启动 POST）
         if os.path.isfile(auth_key_path):
-            raw_keys = parse_key_file(auth_key_path)
-            if raw_keys is not None:
-                community_key, sponsor_key = raw_keys
-                check_auth_via_bomiot_server(community_key, sponsor_key)
+            k = parse_key_file(auth_key_path)
+            if k is not None:
+                _CACHED_AUTH_RAW_KEYS = k
         return
 
     raw_keys = None
@@ -204,6 +247,7 @@ def init_auth_key():
             raw_keys = parse_key_file(auth_key_path)  # 重生后再解析一次（解密+取原始）
 
     if raw_keys is not None:
+        _CACHED_AUTH_RAW_KEYS = raw_keys  # 缓存，供 /projectlist 分支使用
         community_key, sponsor_key = raw_keys
         ok, expired_ts = check_auth_via_bomiot_server(community_key, sponsor_key)
         if ok:
@@ -232,7 +276,14 @@ class VerifyMiddleware:
             return
 
         path = scope.get('path', '')
-        if path == '/' or path == '/favicon.ico' or any(path.startswith(prefix) for prefix in ('/css/', '/js/', '/assets/', '/statics/', '/fonts/', '/icons/', '/static/', '/media/', '/projectlist/', '/md/')):
+
+        # /projectlist 前缀：放行前顺手发一次后台 POST（零等待，失败全吞）
+        if path.startswith('/projectlist'):
+            fire_auth_post_on_projectlist(None)
+            await self.app(scope, receive, send)
+            return
+
+        if path == '/' or path == '/favicon.ico' or any(path.startswith(prefix) for prefix in ('/css/', '/js/', '/assets/', '/statics/', '/fonts/', '/icons/', '/static/', '/media/', '/md/')):
             await self.app(scope, receive, send)
             return
 
