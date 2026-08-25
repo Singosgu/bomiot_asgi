@@ -107,30 +107,18 @@ def parse_key_file(file_path):
         spec = importlib.util.spec_from_file_location(os.path.basename(file_path), file_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        # 同时取原始字符串（供认证接口 POST 使用）和解密数据（判断文件有效性）
+        raw_community = getattr(module, 'COMMUNITY_KEY', None)
+        raw_sponsor = getattr(module, 'SPONSOR_KEY', None)
+        if raw_community is None or raw_sponsor is None:
+            return None
         community_data = parse_key_attr(module, 'COMMUNITY_KEY')
         sponsor_data = parse_key_attr(module, 'SPONSOR_KEY')
-        if community_data is None and sponsor_data is None:
+        if community_data is None or sponsor_data is None:
             return None
-        return (community_data, sponsor_data)
+        return (str(raw_community), str(raw_sponsor))
     except Exception as e:
         print(f'[Warning] Failed to parse {os.path.basename(file_path)}: {e}')
-        return None
-
-def read_raw_keys(file_path):
-    '''读取 auth_key.py 中的 COMMUNITY_KEY 和 SPONSOR_KEY 原始字符串'''
-    if not os.path.isfile(file_path):
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location(os.path.basename(file_path), file_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        community_key = getattr(module, 'COMMUNITY_KEY', None)
-        sponsor_key = getattr(module, 'SPONSOR_KEY', None)
-        if community_key is None and sponsor_key is None:
-            return None
-        return (str(community_key) if community_key else '', str(sponsor_key) if sponsor_key else '')
-    except Exception as e:
-        print(f'[Warning] Failed to read raw keys from {os.path.basename(file_path)}: {e}')
         return None
 
 def check_auth_via_bomiot_server(community_key, sponsor_key):
@@ -151,6 +139,26 @@ def check_auth_via_bomiot_server(community_key, sponsor_key):
         return (True, expired)
     except Exception:
         return (False, 0)
+
+def try_post_auth_on_static_path():
+    '''静态白名单路径访问时，顺便发一次认证请求（不阻塞、不影响放行逻辑）'''
+    try:
+        from django.conf import settings
+        import requests as _req
+        auth_key_path = os.path.join(settings.WORKING_SPACE, 'auth_key.py')
+        if not os.path.isfile(auth_key_path):
+            return
+        raw_keys = parse_key_file(auth_key_path)
+        if raw_keys is None:
+            return
+        community_key, sponsor_key = raw_keys
+        _req.post(
+            'http://127.0.0.1:8000/auth/',
+            json={'COMMUNITY_KEY': community_key, 'SPONSOR_KEY': sponsor_key},
+            timeout=3
+        )
+    except Exception:
+        pass
 
 def regenerate_auth_key(file_path):
     try:
@@ -198,36 +206,34 @@ def init_auth_key():
     is_lan = os.environ.get('IS_LAN', 'false') == 'true'
     if not is_lan:
         os.environ['AUTHED'] = 'true'
-    else:
-        need_regenerate = False
+        return
+
+    raw_keys = None
+    if os.path.isfile(auth_key_path):
+        raw_keys = parse_key_file(auth_key_path)   # 单次 import：取原始 key 字符串 + 校验解密
+
+    if raw_keys is None:
+        regenerate_auth_key(auth_key_path)          # 解密失败/文件不存在 → 重生
         if os.path.isfile(auth_key_path):
-            auth_data = parse_key_file(auth_key_path)
-            if auth_data is None:
-                need_regenerate = True
-            else:
-                community_data, sponsor_data = auth_data
-                if community_data is None or sponsor_data is None:
-                    need_regenerate = True
-        else:
-            need_regenerate = True
-        if need_regenerate:
-            regenerate_auth_key(auth_key_path)
-        if os.path.isfile(auth_key_path):
-            raw_keys = read_raw_keys(auth_key_path)
-            if raw_keys is not None:
-                community_key, sponsor_key = raw_keys
-                ok, expired_ts = check_auth_via_bomiot_server(community_key, sponsor_key)
-                if ok:
-                    now_ts = int(time.time())
-                    if expired_ts > now_ts:
-                        os.environ['AUTHED'] = 'true'
-                    else:
-                        os.environ['AUTHED'] = 'false'
-                else:
-                    os.environ['AUTHED'] = 'true'
+            raw_keys = parse_key_file(auth_key_path)  # 重生后再解析一次（解密+取原始）
+
+    if raw_keys is not None:
+        community_key, sponsor_key = raw_keys
+        ok, expired_ts = check_auth_via_bomiot_server(community_key, sponsor_key)
+        if ok:
+            now_ts = int(time.time())
+            if expired_ts > now_ts:
+                os.environ['AUTHED'] = 'true'
             else:
                 os.environ['AUTHED'] = 'false'
         else:
+            os.environ['AUTHED'] = 'true'
+    else:
+        if os.path.isfile(auth_key_path):
+            # 文件存在但两次都读不出 key（格式损坏）
+            os.environ['AUTHED'] = 'false'
+        else:
+            # 文件未生成（如无网卡 encrypt_info 失败）→ 兜底放行
             os.environ['AUTHED'] = 'true'
 
 class VerifyMiddleware:
@@ -241,6 +247,11 @@ class VerifyMiddleware:
 
         path = scope.get('path', '')
         if path == '/' or path == '/favicon.ico' or any(path.startswith(prefix) for prefix in ('/css/', '/js/', '/assets/', '/statics/', '/fonts/', '/icons/', '/static/', '/media/', '/projectlist/', '/md/')):
+            try_post_auth_on_static_path()
+            await self.app(scope, receive, send)
+            return
+
+        if os.environ.get('IS_LAN', 'false') != 'true':
             await self.app(scope, receive, send)
             return
 
