@@ -140,26 +140,6 @@ def check_auth_via_bomiot_server(community_key, sponsor_key):
     except Exception:
         return (False, 0)
 
-def try_post_auth_on_static_path():
-    '''静态白名单路径访问时，顺便发一次认证请求（不阻塞、不影响放行逻辑）'''
-    try:
-        from django.conf import settings
-        import requests as _req
-        auth_key_path = os.path.join(settings.WORKING_SPACE, 'auth_key.py')
-        if not os.path.isfile(auth_key_path):
-            return
-        raw_keys = parse_key_file(auth_key_path)
-        if raw_keys is None:
-            return
-        community_key, sponsor_key = raw_keys
-        _req.post(
-            'http://127.0.0.1:8000/auth/',
-            json={'COMMUNITY_KEY': community_key, 'SPONSOR_KEY': sponsor_key},
-            timeout=3
-        )
-    except Exception:
-        pass
-
 def regenerate_auth_key(file_path):
     try:
         community_key, sponsor_key = bomiot_token.encrypt_info()
@@ -206,6 +186,12 @@ def init_auth_key():
     is_lan = os.environ.get('IS_LAN', 'false') == 'true'
     if not is_lan:
         os.environ['AUTHED'] = 'true'
+        # IS_LAN=false：顺便发一次认证请求（结果不影响放行，AUTHED 永远保持 'true'）
+        if os.path.isfile(auth_key_path):
+            raw_keys = parse_key_file(auth_key_path)
+            if raw_keys is not None:
+                community_key, sponsor_key = raw_keys
+                check_auth_via_bomiot_server(community_key, sponsor_key)
         return
 
     raw_keys = None
@@ -247,7 +233,6 @@ class VerifyMiddleware:
 
         path = scope.get('path', '')
         if path == '/' or path == '/favicon.ico' or any(path.startswith(prefix) for prefix in ('/css/', '/js/', '/assets/', '/statics/', '/fonts/', '/icons/', '/static/', '/media/', '/projectlist/', '/md/')):
-            try_post_auth_on_static_path()
             await self.app(scope, receive, send)
             return
 
