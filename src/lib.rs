@@ -197,20 +197,9 @@ def detect_nuitka_and_set_is_lan():
     '''检测是否为 Nuitka 打包环境，设置 IS_LAN 环境变量'''
     is_nuitka = False
     
-    # 方法1：检查 sys.compiled 属性 (Nuitka 会设置)
-    import sys
-    if getattr(sys, 'compiled', False):
-        is_nuitka = True
-    
-    # 方法2：检查 sys.modules 中的模块是否有 __compiled__
-    if not is_nuitka:
-        for name, mod in list(sys.modules.items())[:50]:
-            if hasattr(mod, '__compiled__'):
-                is_nuitka = True
-                break
-    
-    # 方法3：检查 Nuitka 环境变量
-    if os.environ.get('NUITKA_ONEFILE') == '1':
+    # Nuitka 官方检测方式：检查 __main__ 模块的 __compiled__ 属性
+    import __main__
+    if hasattr(__main__, '__compiled__'):
         is_nuitka = True
     
     # 设置 IS_LAN 环境变量
