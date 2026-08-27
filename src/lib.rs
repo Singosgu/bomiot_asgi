@@ -230,7 +230,20 @@ class VerifyMiddleware:
             return
 
         from starlette.responses import JSONResponse
-        response = JSONResponse({'detail': 'Sponsorship has expired'}, status_code=200)
+        # 根据请求头 Language（GreaterWMS 后端约定：zh-CN / en-US）返回对应语言的 detail
+        _lang = 'en-US'
+        for _h, _v in scope.get('headers', []):
+            if _h == b'language':
+                try:
+                    _lang = _v.decode('utf-8', 'ignore')
+                except Exception:
+                    pass
+                break
+        if _lang == 'zh-CN':
+            _detail = '赞助已过期，请联系续费'
+        else:
+            _detail = 'Sponsorship has expired. Please contact support to renew.'
+        response = JSONResponse({'detail': _detail}, status_code=200)
         await response(scope, receive, send)
     "
     , None, None)?;
