@@ -22,6 +22,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
       - name: Upgrade pip and install build dependencies
         run: |
           uv pip install --upgrade pip
@@ -29,7 +31,7 @@ jobs:
       - name: Build wheel (macOS)
         uses: PyO3/maturin-action@v1
         with:
-          args: --release --target x86_64-apple-darwin --out dist
+          args: --release --target universal2-apple-darwin --out dist
 
       - name: List wheels
         run: ls -lh dist/
@@ -40,7 +42,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ github.job }}-${{ matrix.python-version }}
+          name: wheels-${{ github.job }}-universal-${{ matrix.python-version }}
           path: dist
   windows-latest:
     runs-on: windows-latest
@@ -140,10 +142,68 @@ jobs:
         with:
           name: wheels-${{ github.job }}-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
+  linux-latest-aarch64:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Build aarch64 Wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: aarch64
+          manylinux: auto
+          before-script-linux: |
+            apt-get update && apt-get install -y libssl-dev pkg-config
+            rustc --version
+          args: --release --interpreter python${{ matrix.python-version }} --out dist
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-latest-aarch64-${{ matrix.python-version }}
+          path: dist
+  linux-latest-armv7:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Build armv7 Wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: armv7
+          manylinux: auto
+          before-script-linux: |
+            apt-get update && apt-get install -y libssl-dev pkg-config
+            rustc --version
+          args: --release --interpreter python${{ matrix.python-version }} --out dist
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-latest-armv7-${{ matrix.python-version }}
+          path: dist
   merge:
     name: Building Single Artifact
     runs-on: ubuntu-latest
-    needs: [macos-latest, windows-latest, linux-latest]
+    needs: [macos-latest, windows-latest, linux-latest, linux-latest-aarch64, linux-latest-armv7]
     steps:
       - name: Downloading all Artifacts
         uses: actions/download-artifact@v4
@@ -162,7 +222,7 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    needs: [macos-latest, windows-latest, linux-latest, merge]
+    needs: [macos-latest, windows-latest, linux-latest, linux-latest-aarch64, linux-latest-armv7, merge]
     steps:
       - uses: actions/download-artifact@v4
         with:
