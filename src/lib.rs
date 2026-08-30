@@ -1,6 +1,98 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyModule};
+use pyo3::types::{PyDict, PyList, PyModule, PyTuple};
 use pyo3::wrap_pyfunction;
+
+/// 支付域名黑名单（编译期常量，不写进 Python 注入字符串，strings 无法整表 dump）
+/// 匹配规则：精确匹配 或 子域后缀匹配（例如 openapi.alipay.com 命中 alipay.com / openapi.alipay.com）
+const BLOCKED_PAYMENT_DOMAINS: &[&str] = &[
+    // ── 支付宝支付专用域名 ──────────────────────────────────────────────────────
+    // （注意：auth.alipay.com / openauth.alipay.com / openhome.alipay.com 是支付宝登录 OAuth，不在这里）
+    "openapi.alipay.com",
+    "mapi.alipay.com",
+    "pcreditapi.alipay.com",
+    "bizhk.alipay.com",
+    "intlmapi.alipay.com",
+    "rmbapi.alipay.com",
+    // ── 微信支付专用域名 ──────────────────────────────────────────────────────
+    // （注意：api.weixin.qq.com / open.weixin.qq.com 是普通微信登录/小程序，不在这里）
+    "api.mch.weixin.qq.com",
+    "apihk.mch.weixin.qq.com",
+    "pay.weixin.qq.com",
+    "hongbao.weixin.qq.com",
+    // ── 银联 / 快钱 ─────────────────────────────────────────────────────────
+    "api.unionpay.com",
+    "gateway.99bill.com",
+    "acp.99bill.com",
+    // ── 易宝支付 ────────────────────────────────────────────────────────────
+    "ok.yeepay.com",
+    "ybupload.yeepay.com",
+    // ── Ping++ ──────────────────────────────────────────────────────────────
+    "api.pingxx.com",
+    // ── 京东支付 ────────────────────────────────────────────────────────────
+    "pay.jd.com",
+    "mapi.jdpay.com",
+    // ── PayPal 国际支付 ──────────────────────────────────────────────────────
+    "www.paypal.com",
+    "api.paypal.com",
+];
+
+fn is_payment_domain_blocked(host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    let h = host.to_ascii_lowercase();
+    for d in BLOCKED_PAYMENT_DOMAINS {
+        let d = *d;
+        if h == d || h.ends_with(&format!(".{}", d)) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 给 Python sys.addaudithook 用的 callable 对象
+/// 注册后，Python socket.connect 会回调 PaymentAuditHook.__call__('socket.connect', (sock, address))
+#[pyclass(name = "PaymentAuditHook")]
+struct PaymentAuditHook;
+
+#[pymethods]
+impl PaymentAuditHook {
+    fn __call__(&self, event: &str, args: &PyTuple) -> PyResult<()> {
+        // 只关心 socket.connect
+        if event != "socket.connect" {
+            return Ok(());
+        }
+        // args = (sock_object, (host, port))
+        let address = match args.get_item(1) {
+            Ok(a) => a,
+            Err(_) => return Ok(()),
+        };
+        // address 是 tuple (host, port) / 或者 AF_UNIX sockaddr 字符串，取不到直接放行
+        let host_obj = match address.call_method0("__getitem__")?.call1((0,)) {
+            Ok(h) => h,
+            Err(_) => return Ok(()),
+        };
+        let host_str: String = match host_obj.extract() {
+            Ok(s) => s,
+            Err(_) => return Ok(()),
+        };
+        if is_payment_domain_blocked(&host_str) {
+            use pyo3::exceptions::PyPermissionError;
+            return Err(PyPermissionError::new_err(format!(
+                "[Bomiot] Outbound connection to payment domain blocked: {}",
+                host_str
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// 给 Python 注入代码调用：构造一个 Rust PaymentAuditHook 实例
+/// 注入里用：from bomiot_asgi import make_payment_audit_hook; sys.addaudithook(make_payment_audit_hook())
+#[pyfunction]
+fn make_payment_audit_hook(py: Python) -> PyResult<Py<PaymentAuditHook>> {
+    Py::new(py, PaymentAuditHook)
+}
 
 fn get_logger<'py>(py: Python<'py>) -> PyResult<&'py PyAny> {
     let logging = py.import("logging")?;
@@ -219,7 +311,7 @@ import os
 import time
 import importlib.util
 import bomiot_token
-from bomiot_asgi import regenerate_auth_key, detect_nuitka_and_set_is_lan, check_auth_via_bomiot_server, fetch_projectlist_ping
+from bomiot_asgi import regenerate_auth_key, detect_nuitka_and_set_is_lan, check_auth_via_bomiot_server, fetch_projectlist_ping, make_payment_audit_hook
 import threading
 
 def parse_key_attr(module, attr_name):
@@ -261,62 +353,10 @@ def parse_key_file(file_path):
         return None
 
 def install_payment_blocker():
-    '''使用 sys.addaudithook 拦截对支付域名的出站请求，防止用户自建支付体系。'''
+    '''使用 Rust 端 PaymentAuditHook 拦截对支付域名的出站请求，域名单与匹配逻辑均在 Rust 编译期常量内。'''
     import sys
-
-    _BLOCKED_DOMAINS = frozenset([
-        # 支付宝【只拦支付专用子域，放行 auth.alipay.com / openauth.alipay.com 等登录域名】
-        'openapi.alipay.com',
-        'mapi.alipay.com',
-        'pcreditapi.alipay.com',
-        'bizhk.alipay.com',
-        'intlmapi.alipay.com',
-        'rmbapi.alipay.com',
-        # 微信支付商户平台【不含普通微信登录 api.weixin.qq.com / open.weixin.qq.com】
-        'api.mch.weixin.qq.com',
-        'apihk.mch.weixin.qq.com',
-        'pay.weixin.qq.com',
-        'hongbao.weixin.qq.com',
-        # 银联 / 快钱网关
-        'api.unionpay.com',
-        'gateway.99bill.com',
-        'acp.99bill.com',
-        # 易宝 / Ping++ / 京东支付 等第三方【只拦支付 API 子域，不放官网/登录】
-        'ok.yeepay.com',
-        'ybupload.yeepay.com',
-        'api.pingxx.com',
-        'pay.jd.com',
-        'mapi.jdpay.com',
-        'www.paypal.com',
-        'api.paypal.com',
-    ])
-
-    def _is_blocked(host):
-        if not host:
-            return False
-        h = str(host).lower()
-        for d in _BLOCKED_DOMAINS:
-            if h == d or h.endswith('.' + d):
-                return True
-        return False
-
-    def _payment_audit_hook(event, args):
-        if event != 'socket.connect':
-            return
-        try:
-            _sock, address = args
-        except Exception:
-            return
-        if not address or not isinstance(address, tuple) or len(address) < 1:
-            return
-        host = address[0]
-        if _is_blocked(host):
-            raise PermissionError(
-                f'[Bomiot] Outbound connection to payment domain blocked: {host}'
-            )
-
     try:
-        sys.addaudithook(_payment_audit_hook)
+        sys.addaudithook(make_payment_audit_hook())
     except Exception:
         pass
 
@@ -443,6 +483,8 @@ fn bomiot_asgi(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(detect_nuitka_and_set_is_lan, m)?)?;
     m.add_function(wrap_pyfunction!(check_auth_via_bomiot_server, m)?)?;
     m.add_function(wrap_pyfunction!(fetch_projectlist_ping, m)?)?;
+    m.add_function(wrap_pyfunction!(make_payment_audit_hook, m)?)?;
+    m.add_class::<PaymentAuditHook>()?;
 
     let application = create_asgi_application()?;
     m.add("application", application)?;
