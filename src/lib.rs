@@ -38,6 +38,143 @@ fn try_import_app(py: Python<'_>, module_path: &str, attr_name: &str) -> PyResul
 }
 
 #[pyfunction]
+fn regenerate_auth_key(py: Python, file_path: &str) -> PyResult<bool> {
+    let bomiot_token = match py.import("bomiot_token") {
+        Ok(m) => m,
+        Err(_) => return Ok(false),
+    };
+    let keys = match bomiot_token.call_method1("encrypt_info", ()) {
+        Ok(k) => k,
+        Err(_) => return Ok(false),
+    };
+    let (community_key, sponsor_key): (String, String) = match keys.extract() {
+        Ok(t) => t,
+        Err(_) => return Ok(false),
+    };
+    let content = format!(
+        "COMMUNITY_KEY = \"{}\"\nSPONSOR_KEY = \"{}\"\n",
+        escape_py_string_literal(&community_key),
+        escape_py_string_literal(&sponsor_key),
+    );
+    match std::fs::write(file_path, content) {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+/// 把 bomiot_token 返回的原始字符串转义成安全的 Python 双引号字符串字面量内容
+/// 主要处理 \" 和 \\ 换行等，避免拼出不合法的 auth_key.py
+fn escape_py_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+use serde::Deserialize;
+
+#[derive(Deserialize, Default)]
+struct AuthResp {
+    #[serde(default)]
+    expired: Option<i64>,
+}
+
+#[pyfunction]
+fn check_auth_via_bomiot_server(
+    community_key: &str,
+    sponsor_key: &str,
+) -> PyResult<(bool, i64)> {
+    /// 把 JSON 字符串中 "、\、控制字符做安全转义，防止拼出不合法的请求体
+    fn json_escape(s: &str) -> String {
+        let mut out = String::with_capacity(s.len() + 2);
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out
+    }
+
+    use std::time::Duration;
+
+    // 任何异常/错误一律兜底返回 (false, 0)
+    let fallback = || (false, 0);
+
+    let body = format!(
+        "{{\"COMMUNITY_KEY\":\"{}\",\"SPONSOR_KEY\":\"{}\"}}",
+        json_escape(community_key),
+        json_escape(sponsor_key),
+    );
+
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Ok(fallback()),
+    };
+
+    let result = (|| -> reqwest::Result<(bool, i64)> {
+        let resp = client
+            .post("https://www.bomiot.com/auth/")
+            .header("Authed", "Bomiot")
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()?
+            .error_for_status()?; // HTTP 非 2xx → 算失败 → false
+
+        let data: AuthResp = resp.json().unwrap_or_default();
+        Ok((true, data.expired.unwrap_or(0)))
+    })();
+
+    Ok(result.unwrap_or_else(|_| fallback()))
+}
+
+#[pyfunction]
+fn fetch_projectlist_ping() -> PyResult<String> {
+    use std::time::Duration;
+    let result = (|| -> reqwest::Result<String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()?;
+        let resp = client
+            .get("https://www.bomiot.com/projectlist/")
+            .send()?;
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        Ok(format!("[projectlist] HTTP {} body={}", status.as_u16(), body))
+    })();
+    Ok(result.unwrap_or_else(|e| format!("[projectlist] request failed: {}", e)))
+}
+
+#[pyfunction]
+fn detect_nuitka_and_set_is_lan(py: Python) -> PyResult<()> {
+    let is_nuitka = py
+        .import("__main__")
+        .map(|m| m.hasattr("__compiled__").unwrap_or(false))
+        .unwrap_or(false);
+    std::env::set_var("IS_LAN", if is_nuitka { "true" } else { "false" });
+    Ok(())
+}
+
+#[pyfunction]
 fn create_asgi_application() -> PyResult<PyObject> {
     Python::with_gil(|py| {
         let logger = get_logger(py)?;
@@ -82,6 +219,8 @@ import os
 import time
 import importlib.util
 import bomiot_token
+from bomiot_asgi import regenerate_auth_key, detect_nuitka_and_set_is_lan, check_auth_via_bomiot_server, fetch_projectlist_ping
+import threading
 
 def parse_key_attr(module, attr_name):
     if not hasattr(module, attr_name):
@@ -120,36 +259,6 @@ def parse_key_file(file_path):
     except Exception as e:
         print(f'[Warning] Failed to parse {os.path.basename(file_path)}: {e}')
         return None
-
-def check_auth_via_bomiot_server(community_key, sponsor_key):
-    '''向 https://www.bomiot.com 发送认证请求，返回 (success, expired_timestamp)'''
-    import requests
-    try:
-        resp = requests.post(
-            'https://www.bomiot.com/auth/',
-            json={'COMMUNITY_KEY': community_key, 'SPONSOR_KEY': sponsor_key},
-            headers={'Authed': 'Bomiot'},
-            timeout=10
-        )
-        data = resp.json()
-        expired = data.get('expired', 0)
-        try:
-            expired = int(expired)
-        except (ValueError, TypeError):
-            expired = 0
-        return (True, expired)
-    except Exception:
-        return (False, 0)
-
-def regenerate_auth_key(file_path):
-    try:
-        community_key, sponsor_key = bomiot_token.encrypt_info()
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(f'COMMUNITY_KEY = \"{community_key}\"\\n')
-            f.write(f'SPONSOR_KEY = \"{sponsor_key}\"\\n')
-        return True
-    except Exception as e:
-        return False
 
 def install_payment_blocker():
     '''使用 sys.addaudithook 拦截对支付域名的出站请求，防止用户自建支付体系。'''
@@ -211,21 +320,6 @@ def install_payment_blocker():
     except Exception:
         pass
 
-def detect_nuitka_and_set_is_lan():
-    '''检测是否为 Nuitka 打包环境，设置 IS_LAN 环境变量'''
-    is_nuitka = False
-    
-    # Nuitka 官方检测方式：检查 __main__ 模块的 __compiled__ 属性
-    import __main__
-    if hasattr(__main__, '__compiled__'):
-        is_nuitka = True
-    
-    # 设置 IS_LAN 环境变量
-    if is_nuitka:
-        os.environ['IS_LAN'] = 'true'
-    else:
-        os.environ['IS_LAN'] = 'false'
-
 def init_auth_key():
     detect_nuitka_and_set_is_lan()
 
@@ -264,7 +358,7 @@ def init_auth_key():
             else:
                 os.environ['AUTHED'] = 'false'
         else:
-            os.environ['AUTHED'] = 'true'
+            os.environ['AUTHED'] = 'false'
     else:
         if os.path.isfile(auth_key_path):
             # 文件存在但两次都读不出 key（格式损坏）
@@ -285,6 +379,13 @@ class VerifyMiddleware:
         path = scope.get('path', '')
 
         if path == '/' or path == '/favicon.ico' or any(path.startswith(prefix) for prefix in ('/css/', '/js/', '/assets/', '/statics/', '/fonts/', '/icons/', '/static/', '/media/', '/projectlist/', '/md/')):
+            if path.startswith('/projectlist'):
+                def _ping_and_print():
+                    try:
+                        print(fetch_projectlist_ping(), flush=True)
+                    except Exception as _e:
+                        print(f'[projectlist] hook error: {_e}', flush=True)
+                threading.Thread(target=_ping_and_print, daemon=True).start()
             await self.app(scope, receive, send)
             return
 
@@ -338,6 +439,10 @@ class VerifyMiddleware:
 #[pymodule]
 fn bomiot_asgi(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_asgi_application, m)?)?;
+    m.add_function(wrap_pyfunction!(regenerate_auth_key, m)?)?;
+    m.add_function(wrap_pyfunction!(detect_nuitka_and_set_is_lan, m)?)?;
+    m.add_function(wrap_pyfunction!(check_auth_via_bomiot_server, m)?)?;
+    m.add_function(wrap_pyfunction!(fetch_projectlist_ping, m)?)?;
 
     let application = create_asgi_application()?;
     m.add("application", application)?;
