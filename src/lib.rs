@@ -151,6 +151,66 @@ def regenerate_auth_key(file_path):
     except Exception as e:
         return False
 
+def install_payment_blocker():
+    '''使用 sys.addaudithook 拦截对支付域名的出站请求，防止用户自建支付体系。'''
+    import sys
+
+    _BLOCKED_DOMAINS = frozenset([
+        # 支付宝【只拦支付专用子域，放行 auth.alipay.com / openauth.alipay.com 等登录域名】
+        'openapi.alipay.com',
+        'mapi.alipay.com',
+        'pcreditapi.alipay.com',
+        'bizhk.alipay.com',
+        'intlmapi.alipay.com',
+        'rmbapi.alipay.com',
+        # 微信支付商户平台【不含普通微信登录 api.weixin.qq.com / open.weixin.qq.com】
+        'api.mch.weixin.qq.com',
+        'apihk.mch.weixin.qq.com',
+        'pay.weixin.qq.com',
+        'hongbao.weixin.qq.com',
+        # 银联 / 快钱网关
+        'api.unionpay.com',
+        'gateway.99bill.com',
+        'acp.99bill.com',
+        # 易宝 / Ping++ / 京东支付 等第三方【只拦支付 API 子域，不放官网/登录】
+        'ok.yeepay.com',
+        'ybupload.yeepay.com',
+        'api.pingxx.com',
+        'pay.jd.com',
+        'mapi.jdpay.com',
+        'www.paypal.com',
+        'api.paypal.com',
+    ])
+
+    def _is_blocked(host):
+        if not host:
+            return False
+        h = str(host).lower()
+        for d in _BLOCKED_DOMAINS:
+            if h == d or h.endswith('.' + d):
+                return True
+        return False
+
+    def _payment_audit_hook(event, args):
+        if event != 'socket.connect':
+            return
+        try:
+            _sock, address = args
+        except Exception:
+            return
+        if not address or not isinstance(address, tuple) or len(address) < 1:
+            return
+        host = address[0]
+        if _is_blocked(host):
+            raise PermissionError(
+                f'[Bomiot] Outbound connection to payment domain blocked: {host}'
+            )
+
+    try:
+        sys.addaudithook(_payment_audit_hook)
+    except Exception:
+        pass
+
 def detect_nuitka_and_set_is_lan():
     '''检测是否为 Nuitka 打包环境，设置 IS_LAN 环境变量'''
     is_nuitka = False
@@ -175,6 +235,13 @@ def init_auth_key():
     # 启动时发送一次 https://www.bomiot.com 认证请求，设置 AUTHED
     is_lan = os.environ.get('IS_LAN', 'false') == 'true'
     if not is_lan:
+        # 保证 auth_key.py 一定存在：有就校验解密，缺/坏就重生；不发认证 POST
+        if not os.path.isfile(auth_key_path):
+            regenerate_auth_key(auth_key_path)
+        else:
+            raw_keys_local = parse_key_file(auth_key_path)
+            if raw_keys_local is None:
+                regenerate_auth_key(auth_key_path)
         os.environ['AUTHED'] = 'true'
         return
 
@@ -249,6 +316,7 @@ class VerifyMiddleware:
     , None, None)?;
 
         py.run("init_auth_key()", None, None)?;
+        py.run("install_payment_blocker()", None, None)?;
 
         let middleware_class = py.import("starlette.middleware")?.getattr("Middleware")?;
         let verify_middleware = py.eval("VerifyMiddleware", None, None)?;
