@@ -631,6 +631,27 @@ class VerifyMiddleware:
 
         logger.call_method1("info", ("ASGI application created successfully",))?;
 
+        // 无论扩展模块以"单文件 bomiot_asgi.pyd"形态安装，
+        // 还是"目录包 bomiot_asgi/__init__.py + bomiot_asgi/bomiot_asgi.pyd 子模块"形态安装，
+        // 都把真正的 ASGI application 对象直接写进两个模块对象的 __dict__['application']。
+        // 这样 uvicorn import bomiot_asgi:application 时直接命中 __dict__ 属性（存在），
+        // 不需要依赖 PEP 562 模块级 __getattr__ 的 CPython 实现细节。
+        py.run(
+            "
+import sys as _sys
+_top = _sys.modules.get('bomiot_asgi')
+_alt = _sys.modules.get('bomiot_asgi.bomiot_asgi')
+for _m in (_top, _alt):
+    if _m is not None:
+        try:
+            setattr(_m, 'application', application)
+        except Exception:
+            pass
+",
+            Some(&globals),
+            None,
+        )?;
+
         Ok(application.into())
     })
 }
@@ -644,89 +665,51 @@ fn bomiot_asgi(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fetch_projectlist_ping, m)?)?;
     m.add_function(wrap_pyfunction!(is_payment_domain_blocked_py, m)?)?;
 
-    // 模块级 lazy application（PEP 562：模块 __getattr__）：
-    // - 不能在 #[pymodule] 初始化阶段立即 create_asgi_application() 放属性，
-    //   因为 create_asgi_application 里的注入代码要用到本模块（sys.modules 里虽然已存在，
-    //   但 Python 的 import/属性解析机制仍可能在 fully initialized 之前触发循环判定）。
-    // - 用 Python 原生 __getattr__ callable 实现：第一次访问 application 时才构造，
-    //   这时候 pymodule 一定已经 return，模块 fully initialized，完全避开 circular import。
-    // - 构造成功后把结果塞进模块 __dict__，后续访问直接走正常属性，不重复调用 __getattr__。
-    py.run(
-        "
-import sys as _sys
-import types as _types
+    // 公开 API __all__：先注册到当前 PyO3 扩展模块对象，保证 `from .bomiot_asgi import *`
+    // 能按列表完整复制 7 个名字 + application。
+    let __all__: Vec<&str> = vec![
+        "application",
+        "create_asgi_application",
+        "regenerate_auth_key",
+        "detect_nuitka_and_set_is_lan",
+        "check_auth_via_bomiot_server",
+        "fetch_projectlist_ping",
+        "is_payment_domain_blocked_py",
+    ];
+    m.add("__all__", __all__.to_object(py))?;
 
-# PyO3 编译出的扩展可能以两种形态存在：
-#   1) 单文件扩展模块：sys.modules['bomiot_asgi'] 就是本模块自己（#[pymodule] bomiot_asgi）
-#   2) 目录式包（含 __init__.py 做 from .bomiot_asgi import *）：
-#      sys.modules['bomiot_asgi'] 是顶层 package，sys.modules['bomiot_asgi.bomiot_asgi'] 才是本扩展模块。
-# 为了让 uvicorn import bomiot_asgi:application 不管哪种形态都能命中 lazy getter，
-# 我们把同一个 PEP 562 __getattr__ 同时挂到：
-#   - 本扩展模块（self）
-#   - 顶层包 sys.modules['bomiot_asgi']（如果是另一个对象的话，也就是目录包形态）
-_self_name = 'bomiot_asgi'
-# PyO3 #[pymodule] 初始化阶段，本模块一定已经在 sys.modules 里（key 就是 'bomiot_asgi'，
-# 除非是目录包子模块形态，此时 key 是 'bomiot_asgi.bomiot_asgi'，顶层包 key 'bomiot_asgi' 是另一个 ModuleType）
-_top_pkg = _sys.modules.get(_self_name)
-_self_mod = _sys.modules.get(_self_name)
-_alt_key = _self_name + '.' + _self_name
-_alt_mod = _sys.modules.get(_alt_key)
-if _alt_mod is not None and _top_pkg is not None and _alt_mod is not _top_pkg:
-    # 目录包子模块形态：真正的扩展模块是 bomiot_asgi.bomiot_asgi，顶层包在 sys.modules['bomiot_asgi']
-    _self_mod = _alt_mod
-    # 模块公开 API：给顶层包设置 __all__，让 import * / from bomiot_asgi import application 正确识别
-    _targets = (_top_pkg, _self_mod)
-else:
-    # 单文件扩展模块形态：_self_mod 就是 sys.modules['bomiot_asgi'] 自己
-    _targets = (_self_mod,)
+    // ========== 强制 eager 构造 ASGI application，直接写进两个模块 ==========
+    // 之前使用 PEP 562 模块级 __getattr__ lazy 方案，但目录包子模块 .pyd 安装形态下
+    // uvicorn importer 会 getattr(顶层包, 'application') 直接 not found；
+    // 现在直接在 #[pymodule] return 前真实调用一次 create_asgi_application()，
+    // install_payment_blocker / init_auth_key 也顺带跑一次（它们都是幂等一次即可）。
+    // 因为 install_payment_blocker 改成了 sys.modules['bomiot_asgi'] getattr 拿函数，
+    // 不再走 from bomiot_asgi import X，所以这里 eager 调不会触发 circular import。
+    let app: PyObject = create_asgi_application()?;
+    m.add("application", app.clone())?;
 
-_application_singleton = None
-
-def __bomiot_asgi_module_getattr__(name):
-    global _application_singleton
-    if name == 'application':
-        if _application_singleton is None:
-            _factory = _self_mod.create_asgi_application
-            _application_singleton = _factory()
-            # 缓存到所有目标模块的 __dict__，后续访问直接命中属性，不再走 __getattr__
-            for _m in _targets:
-                try:
-                    setattr(_m, 'application', _application_singleton)
-                except Exception:
-                    pass
-        return _application_singleton
-    # 非 application：先按正常机制找模块/顶层包自身属性，找不到才统一 raise AttributeError
-    for _m in _targets:
-        if _m is not None:
-            try:
-                return object.__getattribute__(_m, '__dict__')[name]
-            except (AttributeError, KeyError, Exception):
-                pass
-    raise AttributeError(f\"module 'bomiot_asgi' has no attribute '{name}'\")
-
-# 给模块设置 __all__：保证 `from bomiot_asgi import *` 及 uvicorn/inspect/hasattr 等机制
-# 能正确看到 application 和所有公开 API。
-__all__ = [
-    'application',
-    'create_asgi_application',
-    'regenerate_auth_key',
-    'detect_nuitka_and_set_is_lan',
-    'check_auth_via_bomiot_server',
-    'fetch_projectlist_ping',
-    'is_payment_domain_blocked_py',
-]
-for _m in _targets:
-    if _m is not None:
-        try:
-            setattr(_m, '__getattr__', __bomiot_asgi_module_getattr__)
-            if not hasattr(_m, '__all__'):
-                setattr(_m, '__all__', list(__all__))
-        except Exception:
-            pass
-",
-        None,
-        None,
-    )?;
+    // 同步到顶层包：目录包形态下 sys.modules['bomiot_asgi'] 是父包 ModuleType，
+    // uvicorn import bomiot_asgi:application 最终拿的就是这个父包对象的属性。
+    let sys_modules = py.import("sys")?.getattr("modules")?;
+    if let Some(top_pkg) = sys_modules
+        .call_method1("get", ("bomiot_asgi",))?
+        .extract::<Option<PyObject>>()?
+    {
+        if let Some(alt_mod) = sys_modules
+            .call_method1("get", ("bomiot_asgi.bomiot_asgi",))?
+            .extract::<Option<PyObject>>()?
+        {
+            // 目录包子模块形态：alt_mod 是当前扩展模块，top_pkg 是父包，两者不是同一对象
+            if !alt_mod.is(&top_pkg) {
+                let _ = top_pkg.call_method1(py, "__setattr__", ("application", app.clone()));
+                let _ = top_pkg.call_method1(
+                    py,
+                    "__setattr__",
+                    ("__all__", __all__.clone().to_object(py)),
+                );
+            }
+        }
+    }
 
     Ok(())
 }
