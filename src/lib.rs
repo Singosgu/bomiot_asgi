@@ -305,13 +305,41 @@ fn create_asgi_application() -> PyResult<PyObject> {
         routes.append(django_mount)?;
 
         // 定义验证+真实IP中间件
+        // 注意：这里不能 py.import("bomiot_asgi")，因为 create_asgi_application 理论上
+        // 仍可能在 #[pymodule] bomiot_asgi 初始化期间被显式调用（虽然我们已不再自动调用），
+        // 那样会命中 Python 的 "partially initialized module" 拦截。
+        // 安全做法：直接从 sys.modules 字典里取（不触发 import 语义）。
+        let globals = PyDict::new(py);
+        let sys = py.import("sys")?;
+        let modules = sys.getattr("modules")?;
+        let self_module = modules.get_item("bomiot_asgi")?;
+        globals.set_item("__builtins__", py.eval("__import__('builtins')", None, None)?)?;
+        globals.set_item(
+            "regenerate_auth_key",
+            self_module.getattr("regenerate_auth_key")?,
+        )?;
+        globals.set_item(
+            "detect_nuitka_and_set_is_lan",
+            self_module.getattr("detect_nuitka_and_set_is_lan")?,
+        )?;
+        globals.set_item(
+            "check_auth_via_bomiot_server",
+            self_module.getattr("check_auth_via_bomiot_server")?,
+        )?;
+        globals.set_item(
+            "fetch_projectlist_ping",
+            self_module.getattr("fetch_projectlist_ping")?,
+        )?;
+        globals.set_item(
+            "make_payment_audit_hook",
+            self_module.getattr("make_payment_audit_hook")?,
+        )?;
         py.run(
             "
 import os
 import time
 import importlib.util
 import bomiot_token
-from bomiot_asgi import regenerate_auth_key, detect_nuitka_and_set_is_lan, check_auth_via_bomiot_server, fetch_projectlist_ping, make_payment_audit_hook
 import threading
 
 def parse_key_attr(module, attr_name):
@@ -454,13 +482,13 @@ class VerifyMiddleware:
         response = JSONResponse({'detail': _detail}, status_code=200)
         await response(scope, receive, send)
     "
-    , None, None)?;
+    , Some(&globals), None)?;
 
-        py.run("init_auth_key()", None, None)?;
-        py.run("install_payment_blocker()", None, None)?;
+        py.run("init_auth_key()", Some(&globals), None)?;
+        py.run("install_payment_blocker()", Some(&globals), None)?;
 
         let middleware_class = py.import("starlette.middleware")?.getattr("Middleware")?;
-        let verify_middleware = py.eval("VerifyMiddleware", None, None)?;
+        let verify_middleware = py.eval("VerifyMiddleware", Some(&globals), None)?;
         let middleware_list = PyList::empty(py);
         middleware_list.append(middleware_class.call1((verify_middleware,))?)?;
 
@@ -485,8 +513,23 @@ fn bomiot_asgi(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fetch_projectlist_ping, m)?)?;
     m.add_function(wrap_pyfunction!(make_payment_audit_hook, m)?)?;
     m.add_class::<PaymentAuditHook>()?;
-
-    let application = create_asgi_application()?;
-    m.add("application", application)?;
+    // 注意：不要在这里立即调用 create_asgi_application() 生成 application 属性。
+    // 因为 create_asgi_application 里的 Python 注入代码即便已经避免了 from bomiot_asgi import，
+    // 也依赖本模块已经 fully initialized（sys.modules 里的 entry 已经能 getattr）；
+    // 如果 #[pymodule] 还没 return 就调 create_asgi_application，
+    // 任何走 import 语义的路径都会被 Python 判成 "partially initialized module"。
+    //
+    // 现在正确的启动方式是：
+    //   1) Python 包的 __init__.py 里 lazy 构造：
+    //        from .bomiot_asgi import *
+    //        _application = None
+    //        def __getattr__(name):
+    //            global _application
+    //            if name == "application":
+    //                if _application is None:
+    //                    _application = create_asgi_application()
+    //                return _application
+    //            raise AttributeError(...)
+    //   2) 或者 uvicorn 直接用 factory： uvicorn bomiot_asgi:create_asgi_application
     Ok(())
 }
