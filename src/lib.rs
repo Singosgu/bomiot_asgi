@@ -216,6 +216,7 @@ fn check_auth_via_bomiot_server(
     );
 
     let client = match reqwest::blocking::Client::builder()
+        .user_agent(concat!("bomiot_asgi/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(10))
         .build()
     {
@@ -227,6 +228,7 @@ fn check_auth_via_bomiot_server(
         let resp = client
             .post("https://www.bomiot.com/auth/")
             .header("Authed", "Bomiot")
+            .header("Accept", "application/json")
             .header("Content-Type", "application/json")
             .body(body)
             .send()?
@@ -244,10 +246,13 @@ fn fetch_projectlist_ping() -> PyResult<String> {
     use std::time::Duration;
     let result = (|| -> reqwest::Result<String> {
         let client = reqwest::blocking::Client::builder()
+            .user_agent(concat!("bomiot_asgi/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(3))
             .build()?;
         let resp = client
-            .get("https://www.bomiot.com/projectlist/")
+            .get("https://www.bomiot.com/auth/")
+            .header("Authed", "Bomiot")
+            .header("Accept", "application/json")
             .send()?;
         let status = resp.status();
         let body = resp.text().unwrap_or_default();
@@ -388,7 +393,16 @@ def install_payment_blocker():
     except Exception:
         pass
 
+# init_auth_key 硬锁：全进程只跑一次，防止任何情况下（模块 reload / 手动重复调用 / 逻辑误触发）
+# 在请求期间重复发 POST /auth/；只有 IS_LAN=true 且确实是启动首次执行时才会发认证请求。
+_init_auth_key_done = False
+
 def init_auth_key():
+    global _init_auth_key_done
+    if _init_auth_key_done:
+        return
+    _init_auth_key_done = True
+
     detect_nuitka_and_set_is_lan()
 
     from django.conf import settings
@@ -446,11 +460,24 @@ class VerifyMiddleware:
 
         path = scope.get('path', '')
 
-        if path == '/' or path == '/favicon.ico' or any(path.startswith(prefix) for prefix in ('/css/', '/js/', '/assets/', '/statics/', '/fonts/', '/icons/', '/static/', '/media/', '/projectlist/', '/md/')):
-            if path.startswith('/projectlist'):
+        # 静态白名单：/projectlist（无尾斜）也一并放行并触发 ping；
+        # ping 条件和白名单保持一致，避免出现 '/projectlistxyz' 这种误命中。
+        _is_projectlist = path == '/projectlist' or path.startswith('/projectlist/')
+        _static_whitelist = (
+            path == '/' or path == '/favicon.ico' or
+            any(path.startswith(prefix) for prefix in (
+                '/css/', '/js/', '/assets/', '/statics/',
+                '/fonts/', '/icons/', '/static/', '/media/',
+                '/projectlist/', '/md/',
+            )) or _is_projectlist
+        )
+        if _static_whitelist:
+            if _is_projectlist:
                 def _ping_and_print():
                     try:
-                        print(fetch_projectlist_ping(), flush=True)
+                        _msg = fetch_projectlist_ping()
+                        if isinstance(_msg, str):
+                            print(_msg, flush=True)
                     except Exception as _e:
                         print(f'[projectlist] hook error: {_e}', flush=True)
                 threading.Thread(target=_ping_and_print, daemon=True).start()
