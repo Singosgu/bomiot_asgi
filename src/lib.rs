@@ -250,9 +250,11 @@ fn fetch_projectlist_ping() -> PyResult<String> {
             .timeout(Duration::from_secs(3))
             .build()?;
         let resp = client
-            .get("https://www.bomiot.com/auth/")
+            .post("https://www.bomiot.com/auth/")
             .header("Authed", "Bomiot")
             .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .body("{}")
             .send()?;
         let status = resp.status();
         let body = resp.text().unwrap_or_default();
