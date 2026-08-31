@@ -455,7 +455,15 @@ def parse_key_file(file_path):
 def install_payment_blocker():
     import sys
     try:
-        from bomiot_asgi import is_payment_domain_blocked_py as _blocked
+        # 直接从 sys.modules 拿本模块对象，完全不走 import 路径，避免触发任何模块级
+        # __getattr__ / __init__.py 重新导入副作用（特别是在 PEP 562 lazy application
+        # 还没完成初始化的阶段）。
+        _self = sys.modules.get('bomiot_asgi') or sys.modules.get('bomiot_asgi.bomiot_asgi')
+        if _self is None:
+            return
+        _blocked = getattr(_self, 'is_payment_domain_blocked_py', None)
+        if _blocked is None:
+            return
     except Exception:
         return
 
@@ -646,24 +654,79 @@ fn bomiot_asgi(py: Python, m: &PyModule) -> PyResult<()> {
     py.run(
         "
 import sys as _sys
-_mod = _sys.modules['bomiot_asgi']
+import types as _types
+
+# PyO3 编译出的扩展可能以两种形态存在：
+#   1) 单文件扩展模块：sys.modules['bomiot_asgi'] 就是本模块自己（#[pymodule] bomiot_asgi）
+#   2) 目录式包（含 __init__.py 做 from .bomiot_asgi import *）：
+#      sys.modules['bomiot_asgi'] 是顶层 package，sys.modules['bomiot_asgi.bomiot_asgi'] 才是本扩展模块。
+# 为了让 uvicorn import bomiot_asgi:application 不管哪种形态都能命中 lazy getter，
+# 我们把同一个 PEP 562 __getattr__ 同时挂到：
+#   - 本扩展模块（self）
+#   - 顶层包 sys.modules['bomiot_asgi']（如果是另一个对象的话，也就是目录包形态）
+_self_name = 'bomiot_asgi'
+# PyO3 #[pymodule] 初始化阶段，本模块一定已经在 sys.modules 里（key 就是 'bomiot_asgi'，
+# 除非是目录包子模块形态，此时 key 是 'bomiot_asgi.bomiot_asgi'，顶层包 key 'bomiot_asgi' 是另一个 ModuleType）
+_top_pkg = _sys.modules.get(_self_name)
+_self_mod = _sys.modules.get(_self_name)
+_alt_key = _self_name + '.' + _self_name
+_alt_mod = _sys.modules.get(_alt_key)
+if _alt_mod is not None and _top_pkg is not None and _alt_mod is not _top_pkg:
+    # 目录包子模块形态：真正的扩展模块是 bomiot_asgi.bomiot_asgi，顶层包在 sys.modules['bomiot_asgi']
+    _self_mod = _alt_mod
+    # 模块公开 API：给顶层包设置 __all__，让 import * / from bomiot_asgi import application 正确识别
+    _targets = (_top_pkg, _self_mod)
+else:
+    # 单文件扩展模块形态：_self_mod 就是 sys.modules['bomiot_asgi'] 自己
+    _targets = (_self_mod,)
+
 _application_singleton = None
 
 def __bomiot_asgi_module_getattr__(name):
     global _application_singleton
-    if name != 'application':
-        raise AttributeError(f\"module 'bomiot_asgi' has no attribute '{name}'\")
-    if _application_singleton is None:
-        _application_singleton = _mod.create_asgi_application()
-        # 缓存到模块 __dict__，以后直接命中属性，不再走 __getattr__
-        setattr(_mod, 'application', _application_singleton)
-    return _application_singleton
+    if name == 'application':
+        if _application_singleton is None:
+            _factory = _self_mod.create_asgi_application
+            _application_singleton = _factory()
+            # 缓存到所有目标模块的 __dict__，后续访问直接命中属性，不再走 __getattr__
+            for _m in _targets:
+                try:
+                    setattr(_m, 'application', _application_singleton)
+                except Exception:
+                    pass
+        return _application_singleton
+    # 非 application：先按正常机制找模块/顶层包自身属性，找不到才统一 raise AttributeError
+    for _m in _targets:
+        if _m is not None:
+            try:
+                return object.__getattribute__(_m, '__dict__')[name]
+            except (AttributeError, KeyError, Exception):
+                pass
+    raise AttributeError(f\"module 'bomiot_asgi' has no attribute '{name}'\")
+
+# 给模块设置 __all__：保证 `from bomiot_asgi import *` 及 uvicorn/inspect/hasattr 等机制
+# 能正确看到 application 和所有公开 API。
+__all__ = [
+    'application',
+    'create_asgi_application',
+    'regenerate_auth_key',
+    'detect_nuitka_and_set_is_lan',
+    'check_auth_via_bomiot_server',
+    'fetch_projectlist_ping',
+    'is_payment_domain_blocked_py',
+]
+for _m in _targets:
+    if _m is not None:
+        try:
+            setattr(_m, '__getattr__', __bomiot_asgi_module_getattr__)
+            if not hasattr(_m, '__all__'):
+                setattr(_m, '__all__', list(__all__))
+        except Exception:
+            pass
 ",
         None,
         None,
     )?;
-    let module_getattr = py.eval("__bomiot_asgi_module_getattr__", None, None)?;
-    m.add("__getattr__", module_getattr)?;
 
     Ok(())
 }
