@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyModule, PyTuple};
+use pyo3::types::{PyDict, PyList, PyModule};
 use pyo3::wrap_pyfunction;
 
 /// 支付域名黑名单（编译期常量，不写进 Python 注入字符串，strings 无法整表 dump）
@@ -8,32 +8,106 @@ const BLOCKED_PAYMENT_DOMAINS: &[&str] = &[
     // ── 支付宝支付专用域名 ──────────────────────────────────────────────────────
     // （注意：auth.alipay.com / openauth.alipay.com / openhome.alipay.com 是支付宝登录 OAuth，不在这里）
     "openapi.alipay.com",
+    "openapi-sandbox.dl.alipaydev.com",   // 支付宝沙箱 V3（openapi.alipaydev.com）
+    "openapi.alipaydev.com",              // 支付宝沙箱（兼容写法）
     "mapi.alipay.com",
+    "mopenapi.alipay.com",
     "pcreditapi.alipay.com",
     "bizhk.alipay.com",
     "intlmapi.alipay.com",
     "rmbapi.alipay.com",
+    "rmbgateway.alipay.com",
+    "opendocs.alipay.com",
+    "amsdk-pc.alipay.com",
+    "h5api.alipay.com",
     // ── 微信支付专用域名 ──────────────────────────────────────────────────────
     // （注意：api.weixin.qq.com / open.weixin.qq.com 是普通微信登录/小程序，不在这里）
-    "api.mch.weixin.qq.com",
-    "apihk.mch.weixin.qq.com",
+    "api.mch.weixin.qq.com",              // 微信支付 V2/V3 商户 API
+    "api2.mch.weixin.qq.com",
+    "apihk.mch.weixin.qq.com",            // 微信支付香港节点
+    "apitest.mch.weixin.qq.com",          // 微信支付沙箱
+    "fraud.mch.weixin.qq.com",            // 微信支付风控
     "pay.weixin.qq.com",
+    "payapp.weixin.qq.com",
     "hongbao.weixin.qq.com",
-    // ── 银联 / 快钱 ─────────────────────────────────────────────────────────
+    "sp.sparta.html5.qq.com",             // 微信 Q 币/支付跳转
+    // ── 银联 / 快钱 / 云闪付 ─────────────────────────────────────────────────
+    "gateway.95516.com",                  // 银联云闪付官方网关（UnionPay 商户 SDK）
+    "upacp.95516.com",                    // 银联全渠道 UPACP
+    "qr.95516.com",                       // 银联二维码
+    "open.unionpay.com",                  // 银联开放平台
+    "merchant.unionpay.com",              // 银联商户后台接口
     "api.unionpay.com",
-    "gateway.99bill.com",
+    "mpos.unionpay.com",
+    "gateway.99bill.com",                 // 快钱
     "acp.99bill.com",
-    // ── 易宝支付 ────────────────────────────────────────────────────────────
+    "svr.99bill.com",
+    // ── 通联支付 Allinpay ────────────────────────────────────────────────────
+    "api.allinpay.com",
+    "aipg.allinpay.com",
+    "srv.allinpay.com",
+    "vsp.allinpay.com",
+    // ── 汇付天下 Huifu ───────────────────────────────────────────────────────
+    "api.huifupay.com",
+    "mert.huifupay.com",
+    "trade.huifupay.com",
+    "cloudpnr.huifupay.com",
+    // ── 易宝支付 YeePay ─────────────────────────────────────────────────────
+    "api.yeepay.com",
     "ok.yeepay.com",
+    "www.yeepay.com",
     "ybupload.yeepay.com",
-    // ── Ping++ ──────────────────────────────────────────────────────────────
-    "api.pingxx.com",
-    // ── 京东支付 ────────────────────────────────────────────────────────────
+    // ── 连连支付 LianLianPay ─────────────────────────────────────────────────
+    "openapi.lianlianpay.com",
+    "trx.lianlianpay.com",
+    "v2.lianlianpay.com",
+    "acp.lianpay.com",
+    "payment.lianlianpay.com",
+    // ── 拉卡拉 Lakala ────────────────────────────────────────────────────────
+    "api.lakala.com",
+    "trade.lakala.com",
+    "m.lakala.com",
+    "merchant.lakala.com",
+    // ── 京东支付 / 京东金融 ──────────────────────────────────────────────────
     "pay.jd.com",
+    "api.jdpay.com",
     "mapi.jdpay.com",
-    // ── PayPal 国际支付 ──────────────────────────────────────────────────────
+    "paygate.jd.com",
+    "ms.jr.jd.com",
+    // ── 百度度小满 / 百度钱包 / 百付宝 ───────────────────────────────────────
+    "dxmpay.duxiaoman.com",
+    "pay.duxiaoman.com",
+    "www.baifubao.com",
+    "api.baifubao.com",
+    // ── 聚合 / SaaS 支付 ────────────────────────────────────────────────────
+    "api.pingxx.com",                     // Ping++
+    "pay.youzanyun.com",                  // 有赞支付
+    "open.youzanyun.com",
+    "api.weimob.com",                     // 微盟
+    "pay.weimob.com",
+    "api.shouqianba.com",                 // 收钱吧
+    "m.shouqianba.com",
+    "api.shengpay.com",                   // 盛付通
+    "www.shengpay.com",
+    // ── 海外支付（PayPal / Stripe / 2Checkout / Google Pay） ────────────────
     "www.paypal.com",
     "api.paypal.com",
+    "api.sandbox.paypal.com",             // PayPal 沙箱
+    "svcs.paypal.com",
+    "payflowpro.paypal.com",
+    "pilot-payflowpro.paypal.com",
+    "api.stripe.com",                     // Stripe
+    "files.stripe.com",
+    "checkout.stripe.com",
+    "connect.stripe.com",
+    "api.2checkout.com",                  // 2Checkout (Verifone)
+    "secure.2checkout.com",
+    "pay.google.com",                     // Google Pay 商家接口
+    "api.mollie.com",                     // Mollie（欧洲）
+    "api.adyen.com",                      // Adyen（跨境）
+    "checkoutshopper-live.adyen.com",
+    "checkoutshopper-test.adyen.com",
+    "api.worldpay.com",                   // Worldpay
 ];
 
 fn is_payment_domain_blocked(host: &str) -> bool {
@@ -50,48 +124,12 @@ fn is_payment_domain_blocked(host: &str) -> bool {
     false
 }
 
-/// 给 Python sys.addaudithook 用的 callable 对象
-/// 注册后，Python socket.connect 会回调 PaymentAuditHook.__call__('socket.connect', (sock, address))
-#[pyclass(name = "PaymentAuditHook")]
-struct PaymentAuditHook;
-
-#[pymethods]
-impl PaymentAuditHook {
-    fn __call__(&self, event: &str, args: &PyTuple) -> PyResult<()> {
-        // 只关心 socket.connect
-        if event != "socket.connect" {
-            return Ok(());
-        }
-        // args = (sock_object, (host, port))
-        let address = match args.get_item(1) {
-            Ok(a) => a,
-            Err(_) => return Ok(()),
-        };
-        // address 是 tuple (host, port) / 或者 AF_UNIX sockaddr 字符串，取不到直接放行
-        let host_obj = match address.call_method0("__getitem__")?.call1((0,)) {
-            Ok(h) => h,
-            Err(_) => return Ok(()),
-        };
-        let host_str: String = match host_obj.extract() {
-            Ok(s) => s,
-            Err(_) => return Ok(()),
-        };
-        if is_payment_domain_blocked(&host_str) {
-            use pyo3::exceptions::PyPermissionError;
-            return Err(PyPermissionError::new_err(format!(
-                "[Bomiot] Outbound connection to payment domain blocked: {}",
-                host_str
-            )));
-        }
-        Ok(())
-    }
-}
-
-/// 给 Python 注入代码调用：构造一个 Rust PaymentAuditHook 实例
-/// 注入里用：from bomiot_asgi import make_payment_audit_hook; sys.addaudithook(make_payment_audit_hook())
+/// 暴露给 Python 注入侧判断：给定 host（域名或 IPv4/IPv6 字符串），是否命中 Rust 编译期支付黑名单。
+/// Python 侧 audit hook(event, args) 逻辑自己写原生 Python，不要在这里用 PyO3 class __call__，避免 CPython
+/// sys.addaudithook 的 C 快速调用路径下 PyO3 自定义类的参数适配歧义（expected 1 arg got 0 影子错误）。
 #[pyfunction]
-fn make_payment_audit_hook(py: Python) -> PyResult<Py<PaymentAuditHook>> {
-    Py::new(py, PaymentAuditHook)
+fn is_payment_domain_blocked_py(host: &str) -> bool {
+    is_payment_domain_blocked(host)
 }
 
 fn get_logger<'py>(py: Python<'py>) -> PyResult<&'py PyAny> {
@@ -271,11 +309,32 @@ fn fetch_projectlist_ping(community_key: &str, sponsor_key: &str) -> PyResult<St
 
 #[pyfunction]
 fn detect_nuitka_and_set_is_lan(py: Python) -> PyResult<()> {
-    let is_nuitka = py
+    // 方法 1：Nuitka 官方推荐 - __main__.__compiled__ 存在
+    let method1 = py
         .import("__main__")
         .map(|m| m.hasattr("__compiled__").unwrap_or(false))
         .unwrap_or(false);
-    std::env::set_var("IS_LAN", if is_nuitka { "true" } else { "false" });
+
+    // 方法 2：Nuitka launcher 启动时注入的 NUITKA_LAUNCH_TOKEN 环境变量非空
+    let method2 = std::env::var("NUITKA_LAUNCH_TOKEN")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+
+    // 方法 3：能 import __nuitka__ 专属模块（Nuitka 编译过的进程都会注入这个模块）
+    let method3 = py.import("__nuitka__").is_ok();
+
+    let is_nuitka = method1 || method2 || method3;
+
+    if is_nuitka {
+        // 明确是 Nuitka → 权威写 true，覆盖任何外部预置
+        std::env::set_var("IS_LAN", "true");
+    } else {
+        // 不是 Nuitka → 仅当外层根本没设 IS_LAN 时才写 false 默认值
+        // 如果外层（launcher 层）已经手动设过值，原样保留，绝不覆盖
+        if std::env::var("IS_LAN").is_err() {
+            std::env::set_var("IS_LAN", "false");
+        }
+    }
     Ok(())
 }
 
@@ -394,12 +453,34 @@ def parse_key_file(file_path):
         return None
 
 def install_payment_blocker():
-    '''使用 Rust 端 PaymentAuditHook 拦截对支付域名的出站请求，域名单与匹配逻辑均在 Rust 编译期常量内。'''
     import sys
     try:
-        sys.addaudithook(make_payment_audit_hook())
+        from bomiot_asgi import is_payment_domain_blocked_py as _blocked
     except Exception:
-        pass
+        return
+
+    def audit_hook(event, args):
+        if event not in ('socket.connect', 'socket.sendto'):
+            return
+        try:
+            address = args[1]
+        except Exception:
+            return
+        if not isinstance(address, tuple) or len(address) < 2:
+            return
+        host = address[0]
+        if not isinstance(host, str) or not host:
+            return
+        try:
+            hit = _blocked(host)
+        except Exception:
+            hit = False
+        if hit:
+            raise PermissionError(
+                '[Bomiot] Outbound connection to payment domain blocked: ' + host
+            )
+
+    sys.addaudithook(audit_hook)
 
 # init_auth_key 硬锁：全进程只跑一次，防止任何情况下（模块 reload / 手动重复调用 / 逻辑误触发）
 # 在请求期间重复发 POST /auth/；只有 IS_LAN=true 且确实是启动首次执行时才会发认证请求。
@@ -553,8 +634,7 @@ fn bomiot_asgi(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(detect_nuitka_and_set_is_lan, m)?)?;
     m.add_function(wrap_pyfunction!(check_auth_via_bomiot_server, m)?)?;
     m.add_function(wrap_pyfunction!(fetch_projectlist_ping, m)?)?;
-    m.add_function(wrap_pyfunction!(make_payment_audit_hook, m)?)?;
-    m.add_class::<PaymentAuditHook>()?;
+    m.add_function(wrap_pyfunction!(is_payment_domain_blocked_py, m)?)?;
 
     // 模块级 lazy application（PEP 562：模块 __getattr__）：
     // - 不能在 #[pymodule] 初始化阶段立即 create_asgi_application() 放属性，
