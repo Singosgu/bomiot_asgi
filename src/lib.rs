@@ -505,7 +505,7 @@ class VerifyMiddleware:
 }
 
 #[pymodule]
-fn bomiot_asgi(_py: Python, m: &PyModule) -> PyResult<()> {
+fn bomiot_asgi(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_asgi_application, m)?)?;
     m.add_function(wrap_pyfunction!(regenerate_auth_key, m)?)?;
     m.add_function(wrap_pyfunction!(detect_nuitka_and_set_is_lan, m)?)?;
@@ -513,23 +513,35 @@ fn bomiot_asgi(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fetch_projectlist_ping, m)?)?;
     m.add_function(wrap_pyfunction!(make_payment_audit_hook, m)?)?;
     m.add_class::<PaymentAuditHook>()?;
-    // 注意：不要在这里立即调用 create_asgi_application() 生成 application 属性。
-    // 因为 create_asgi_application 里的 Python 注入代码即便已经避免了 from bomiot_asgi import，
-    // 也依赖本模块已经 fully initialized（sys.modules 里的 entry 已经能 getattr）；
-    // 如果 #[pymodule] 还没 return 就调 create_asgi_application，
-    // 任何走 import 语义的路径都会被 Python 判成 "partially initialized module"。
-    //
-    // 现在正确的启动方式是：
-    //   1) Python 包的 __init__.py 里 lazy 构造：
-    //        from .bomiot_asgi import *
-    //        _application = None
-    //        def __getattr__(name):
-    //            global _application
-    //            if name == "application":
-    //                if _application is None:
-    //                    _application = create_asgi_application()
-    //                return _application
-    //            raise AttributeError(...)
-    //   2) 或者 uvicorn 直接用 factory： uvicorn bomiot_asgi:create_asgi_application
+
+    // 模块级 lazy application（PEP 562：模块 __getattr__）：
+    // - 不能在 #[pymodule] 初始化阶段立即 create_asgi_application() 放属性，
+    //   因为 create_asgi_application 里的注入代码要用到本模块（sys.modules 里虽然已存在，
+    //   但 Python 的 import/属性解析机制仍可能在 fully initialized 之前触发循环判定）。
+    // - 用 Python 原生 __getattr__ callable 实现：第一次访问 application 时才构造，
+    //   这时候 pymodule 一定已经 return，模块 fully initialized，完全避开 circular import。
+    // - 构造成功后把结果塞进模块 __dict__，后续访问直接走正常属性，不重复调用 __getattr__。
+    py.run(
+        "
+import sys as _sys
+_mod = _sys.modules['bomiot_asgi']
+_application_singleton = None
+
+def __bomiot_asgi_module_getattr__(name):
+    global _application_singleton
+    if name != 'application':
+        raise AttributeError(f\"module 'bomiot_asgi' has no attribute '{name}'\")
+    if _application_singleton is None:
+        _application_singleton = _mod.create_asgi_application()
+        # 缓存到模块 __dict__，以后直接命中属性，不再走 __getattr__
+        setattr(_mod, 'application', _application_singleton)
+    return _application_singleton
+",
+        None,
+        None,
+    )?;
+    let module_getattr = py.eval("__bomiot_asgi_module_getattr__", None, None)?;
+    m.add("__getattr__", module_getattr)?;
+
     Ok(())
 }
