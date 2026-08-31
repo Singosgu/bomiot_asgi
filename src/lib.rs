@@ -182,27 +182,28 @@ struct AuthResp {
     expired: Option<i64>,
 }
 
+/// 把 JSON 字符串中 "、\、控制字符做安全转义，防止拼出不合法的请求体
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 #[pyfunction]
 fn check_auth_via_bomiot_server(
     community_key: &str,
     sponsor_key: &str,
 ) -> PyResult<(bool, i64)> {
-    /// 把 JSON 字符串中 "、\、控制字符做安全转义，防止拼出不合法的请求体
-    fn json_escape(s: &str) -> String {
-        let mut out = String::with_capacity(s.len() + 2);
-        for c in s.chars() {
-            match c {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\t' => out.push_str("\\t"),
-                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-                c => out.push(c),
-            }
-        }
-        out
-    }
 
     use std::time::Duration;
 
@@ -242,8 +243,13 @@ fn check_auth_via_bomiot_server(
 }
 
 #[pyfunction]
-fn fetch_projectlist_ping() -> PyResult<String> {
+fn fetch_projectlist_ping(community_key: &str, sponsor_key: &str) -> PyResult<String> {
     use std::time::Duration;
+    let body = format!(
+        "{{\"COMMUNITY_KEY\":\"{}\",\"SPONSOR_KEY\":\"{}\"}}",
+        json_escape(community_key),
+        json_escape(sponsor_key),
+    );
     let result = (|| -> reqwest::Result<String> {
         let client = reqwest::blocking::Client::builder()
             .user_agent(concat!("bomiot_asgi/", env!("CARGO_PKG_VERSION")))
@@ -254,11 +260,11 @@ fn fetch_projectlist_ping() -> PyResult<String> {
             .header("Authed", "Bomiot")
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
-            .body("{}")
+            .body(body)
             .send()?;
         let status = resp.status();
-        let body = resp.text().unwrap_or_default();
-        Ok(format!("[projectlist] HTTP {} body={}", status.as_u16(), body))
+        let resp_body = resp.text().unwrap_or_default();
+        Ok(format!("[projectlist] HTTP {} body={}", status.as_u16(), resp_body))
     })();
     Ok(result.unwrap_or_else(|e| format!("[projectlist] request failed: {}", e)))
 }
@@ -477,7 +483,14 @@ class VerifyMiddleware:
             if _is_projectlist:
                 def _ping_and_print():
                     try:
-                        _msg = fetch_projectlist_ping()
+                        from django.conf import settings
+                        _auth_path = os.path.join(settings.WORKING_SPACE, 'auth_key.py')
+                        _keys = parse_key_file(_auth_path)
+                        if _keys is None:
+                            print('[projectlist] skip ping: auth_key.py not ready', flush=True)
+                            return
+                        (_ck, _sk) = _keys
+                        _msg = fetch_projectlist_ping(_ck, _sk)
                         if isinstance(_msg, str):
                             print(_msg, flush=True)
                     except Exception as _e:
