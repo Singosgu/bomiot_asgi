@@ -873,21 +873,46 @@ def _is_blocked(host):
     return False
 
 def _bomiot_audit_hook(event, args):
-    if event not in ('socket.connect', 'socket.sendto'):
+    # socket.getaddrinfo: args = (host, port, family, type, proto, flags)
+    # 这是 DNS 解析之前的事件，host 是原始域名，能直接命中黑名单
+    if event == 'socket.getaddrinfo':
+        try:
+            host = args[0]
+        except Exception:
+            return
+        if isinstance(host, str) and _is_blocked(host):
+            raise PermissionError(
+                '[Bomiot] Outbound connection to payment domain blocked: ' + host
+            )
         return
-    try:
-        address = args[1]
-    except Exception:
+    # socket.connect: args = (socket, address), address = (host_or_ip, port)
+    if event == 'socket.connect':
+        try:
+            address = args[1]
+        except Exception:
+            return
+        if not isinstance(address, tuple) or len(address) < 2:
+            return
+        host = address[0]
+        if isinstance(host, str) and _is_blocked(host):
+            raise PermissionError(
+                '[Bomiot] Outbound connection to payment domain blocked: ' + host
+            )
         return
-    if not isinstance(address, tuple) or len(address) < 2:
+    # socket.sendto: args = (socket, data, address), address = (host_or_ip, port)
+    if event == 'socket.sendto':
+        try:
+            address = args[2]
+        except Exception:
+            return
+        if not isinstance(address, tuple) or len(address) < 2:
+            return
+        host = address[0]
+        if isinstance(host, str) and _is_blocked(host):
+            raise PermissionError(
+                '[Bomiot] Outbound connection to payment domain blocked: ' + host
+            )
         return
-    host = address[0]
-    if not isinstance(host, str) or not host:
-        return
-    if _is_blocked(host):
-        raise PermissionError(
-            '[Bomiot] Outbound connection to payment domain blocked: ' + host
-        )
 
 _sys.addaudithook(_bomiot_audit_hook)
 ",
