@@ -706,13 +706,12 @@ fn bomiot_asgi(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fetch_projectlist_ping, m)?)?;
     m.add_function(wrap_pyfunction!(is_payment_domain_blocked_py, m)?)?;
 
-    // 公开 API __all__：只导出函数（6 个），ASGI application 不在扩展模块里直接造。
-    // 用法（顶层包 bomiot_asgi/__init__.py）：
-    //     from .bomiot_asgi import *
-    //     application = create_asgi_application()
-    // 让 application 在 import * 完成之后、顶层包完全初始化（不再 partially initialized）
-    // 的时候再调用 create_asgi_application 真正构造，天然绕开 circular import，
-    // 不需要任何 __class__ 替换 / __getattribute__ override / lazy singleton 花活。
+    // 公开 API __all__：含 6 个函数 + 1 个 ASGI application 对象。
+    // 关键：application 在下面已经先 EAGER 调 create_asgi_application() 拿到，
+    // 这里加进 __all__ 后，顶层包 bomiot_asgi/__init__.py 里的
+    // `from .bomiot_asgi import *` 就能自动把 application 复制到顶层包，
+    // 不用用户手动再写 application = create_asgi_application() 那一行，
+    // 也不需要任何 __class__ 替换 / lazy __getattribute__ 花招。
     let __all__: Vec<&str> = vec![
         "create_asgi_application",
         "regenerate_auth_key",
@@ -720,8 +719,43 @@ fn bomiot_asgi(py: Python, m: &PyModule) -> PyResult<()> {
         "check_auth_via_bomiot_server",
         "fetch_projectlist_ping",
         "is_payment_domain_blocked_py",
+        "application",
     ];
     m.add("__all__", __all__.to_object(py))?;
+
+    // ===== EAGER 构造 application：在 #[pymodule] return 之前就把 ASGI app 造好 =====
+    // 此时 6 个 add_function 都已执行完，sys.modules['bomiot_asgi.bomiot_asgi']（目录包子模块）
+    // 或 sys.modules['bomiot_asgi']（单文件扩展）上 regenerate_auth_key / detect_* /
+    // check_auth_* / fetch_projectlist_ping / is_payment_domain_blocked_py 全都存在，
+    // create_asgi_application 内部 self_module.getattr 不会 get 空 → 不会 circular。
+    let application = create_asgi_application()?;
+    // 把 application 属性挂到当前 PyO3 模块（m：&PyModule）上。
+    // PyModule.add() 等价于 Python 里 setattr(module, 'application', value)。
+    m.add("application", application.as_ref(py))?;
+
+    // 再把 application 同时写到 sys.modules 的两个 key（bomiot_asgi 顶层包 +
+    // bomiot_asgi.bomiot_asgi 子模块）上，保证：
+    //   ① `from .bomiot_asgi import *` 扫 __all__ 里的 'application' 时，
+    //     submodule getattr 能命中，不会 AttributeError；
+    //   ② 顶层包复制过去后，uvicorn import bomiot_asgi:application 直接命中，
+    //     不会再出现 "Attribute application not found"。
+    // （setattr 失败直接吞：部分安装形态缺其中一个 key 属于正常情况，不影响）
+    py.run(
+        "
+import sys as _sys
+_app = application  # 从当前 PyModule globals 引用；上面已经 add('application')
+_top = _sys.modules.get('bomiot_asgi')
+_alt = _sys.modules.get('bomiot_asgi.bomiot_asgi')
+for _m in (_top, _alt):
+    if _m is not None:
+        try:
+            setattr(_m, 'application', _app)
+        except Exception:
+            pass
+",
+        None,
+        None,
+    )?;
 
     Ok(())
 }
