@@ -657,7 +657,6 @@ class VerifyMiddleware:
     , Some(&globals), None)?;
 
         py.run("init_auth_key()", Some(&globals), None)?;
-        py.run("install_payment_blocker()", Some(&globals), None)?;
 
         let middleware_class = py.import("starlette.middleware")?.getattr("Middleware")?;
         let verify_middleware = py.eval("VerifyMiddleware", Some(&globals), None)?;
@@ -755,6 +754,42 @@ if _top is not None:
     )?;
     let module_getattr = py.eval("__bomiot_asgi_module_getattr__", None, None)?;
     m.add("__getattr__", module_getattr)?;
+
+    // 模块级即安装支付拦截 hook：import bomiot_asgi 后立刻生效，
+    // 而不是等 uvicorn lazy 构造 ASGI app 才装（APScheduler/Django
+    // management/启动脚本里的请求都可能早于 ASGI app）。
+    py.run(
+        "
+import sys as _sys
+_self = _sys.modules.get('bomiot_asgi') or _sys.modules.get('bomiot_asgi.bomiot_asgi')
+if _self is not None:
+    _blocked = getattr(_self, 'is_payment_domain_blocked_py', None)
+    if _blocked is not None:
+        def _bomiot_audit_hook(event, args):
+            if event not in ('socket.connect', 'socket.sendto'):
+                return
+            try:
+                address = args[1]
+            except Exception:
+                return
+            if not isinstance(address, tuple) or len(address) < 2:
+                return
+            host = address[0]
+            if not isinstance(host, str) or not host:
+                return
+            try:
+                hit = _blocked(host)
+            except Exception:
+                hit = False
+            if hit:
+                raise PermissionError(
+                    '[Bomiot] Outbound connection to payment domain blocked: ' + host
+                )
+        _sys.addaudithook(_bomiot_audit_hook)
+",
+        None,
+        None,
+    )?;
 
     Ok(())
 }
