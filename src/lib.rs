@@ -755,37 +755,141 @@ if _top is not None:
     let module_getattr = py.eval("__bomiot_asgi_module_getattr__", None, None)?;
     m.add("__getattr__", module_getattr)?;
 
-    // 模块级即安装支付拦截 hook：import bomiot_asgi 后立刻生效，
-    // 而不是等 uvicorn lazy 构造 ASGI app 才装（APScheduler/Django
-    // management/启动脚本里的请求都可能早于 ASGI app）。
+    // 模块级即安装支付拦截 hook：import bomiot_asgi 就装 audit_hook，
+    // 纯 Python 注入（黑名单 tuple 直接内联 + 精确/子域匹配）。
+    // 不依赖 sys.modules getattr / Rust PyObject 传参，避免 partially
+    // initialized 时属性没复制完或 install_locals 闭包捕获失败。
     py.run(
         "
 import sys as _sys
-_self = _sys.modules.get('bomiot_asgi') or _sys.modules.get('bomiot_asgi.bomiot_asgi')
-if _self is not None:
-    _blocked = getattr(_self, 'is_payment_domain_blocked_py', None)
-    if _blocked is not None:
-        def _bomiot_audit_hook(event, args):
-            if event not in ('socket.connect', 'socket.sendto'):
-                return
-            try:
-                address = args[1]
-            except Exception:
-                return
-            if not isinstance(address, tuple) or len(address) < 2:
-                return
-            host = address[0]
-            if not isinstance(host, str) or not host:
-                return
-            try:
-                hit = _blocked(host)
-            except Exception:
-                hit = False
-            if hit:
-                raise PermissionError(
-                    '[Bomiot] Outbound connection to payment domain blocked: ' + host
-                )
-        _sys.addaudithook(_bomiot_audit_hook)
+
+_BLOCKED_PAYMENT_DOMAINS = (
+    # 支付宝支付专用
+    'openapi.alipay.com',
+    'openapi-sandbox.dl.alipaydev.com',
+    'openapi.alipaydev.com',
+    'mapi.alipay.com',
+    'mopenapi.alipay.com',
+    'pcreditapi.alipay.com',
+    'bizhk.alipay.com',
+    'intlmapi.alipay.com',
+    'rmbapi.alipay.com',
+    'rmbgateway.alipay.com',
+    'opendocs.alipay.com',
+    'amsdk-pc.alipay.com',
+    'h5api.alipay.com',
+    # 微信支付专用
+    'api.mch.weixin.qq.com',
+    'api2.mch.weixin.qq.com',
+    'apihk.mch.weixin.qq.com',
+    'apitest.mch.weixin.qq.com',
+    'fraud.mch.weixin.qq.com',
+    'pay.weixin.qq.com',
+    'payapp.weixin.qq.com',
+    'hongbao.weixin.qq.com',
+    'sp.sparta.html5.qq.com',
+    # 银联/快钱/云闪付
+    'gateway.95516.com',
+    'upacp.95516.com',
+    'qr.95516.com',
+    'open.unionpay.com',
+    'merchant.unionpay.com',
+    'api.unionpay.com',
+    'mpos.unionpay.com',
+    'gateway.99bill.com',
+    'acp.99bill.com',
+    'svr.99bill.com',
+    # 通联
+    'api.allinpay.com',
+    'aipg.allinpay.com',
+    'srv.allinpay.com',
+    'vsp.allinpay.com',
+    # 汇付天下
+    'api.huifupay.com',
+    'mert.huifupay.com',
+    'trade.huifupay.com',
+    'cloudpnr.huifupay.com',
+    # 易宝
+    'api.yeepay.com',
+    'ok.yeepay.com',
+    'www.yeepay.com',
+    'ybupload.yeepay.com',
+    # 连连
+    'openapi.lianlianpay.com',
+    'trx.lianlianpay.com',
+    'v2.lianlianpay.com',
+    'acp.lianpay.com',
+    'payment.lianlianpay.com',
+    # 拉卡拉
+    'api.lakala.com',
+    'trade.lakala.com',
+    'm.lakala.com',
+    'merchant.lakala.com',
+    # 京东支付
+    'pay.jd.com',
+    'api.jdpay.com',
+    'mapi.jdpay.com',
+    'paygate.jd.com',
+    'ms.jr.jd.com',
+    # 百度/度小满/百付宝
+    'dxmpay.duxiaoman.com',
+    'pay.duxiaoman.com',
+    'www.baifubao.com',
+    'api.baifubao.com',
+    # 聚合 SaaS
+    'api.pingxx.com',
+    'pay.youzanyun.com',
+    'open.youzanyun.com',
+    'api.weimob.com',
+    'pay.weimob.com',
+    'api.shouqianba.com',
+    'm.shouqianba.com',
+    'api.shengpay.com',
+    'www.shengpay.com',
+    # 海外
+    'www.paypal.com',
+    'api.paypal.com',
+    'api.sandbox.paypal.com',
+    'svcs.paypal.com',
+    'payflowpro.paypal.com',
+    'pilot-payflowpro.paypal.com',
+    'api.stripe.com',
+    'files.stripe.com',
+    'checkout.stripe.com',
+    'connect.stripe.com',
+    'api.2checkout.com',
+    'secure.2checkout.com',
+    'pay.google.com',
+    'api.mollie.com',
+)
+
+def _is_blocked(host):
+    if not host:
+        return False
+    h = host.lower()
+    for d in _BLOCKED_PAYMENT_DOMAINS:
+        if h == d or h.endswith('.' + d):
+            return True
+    return False
+
+def _bomiot_audit_hook(event, args):
+    if event not in ('socket.connect', 'socket.sendto'):
+        return
+    try:
+        address = args[1]
+    except Exception:
+        return
+    if not isinstance(address, tuple) or len(address) < 2:
+        return
+    host = address[0]
+    if not isinstance(host, str) or not host:
+        return
+    if _is_blocked(host):
+        raise PermissionError(
+            '[Bomiot] Outbound connection to payment domain blocked: ' + host
+        )
+
+_sys.addaudithook(_bomiot_audit_hook)
 ",
         None,
         None,
