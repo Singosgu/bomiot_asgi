@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyModule};
+use pyo3::types::{PyDict, PyList};
 use pyo3::wrap_pyfunction;
 
 /// 支付域名黑名单（编译期常量，不写进 Python 注入字符串，strings 无法整表 dump）
@@ -382,9 +382,36 @@ fn create_asgi_application() -> PyResult<PyObject> {
         // 那样会命中 Python 的 "partially initialized module" 拦截。
         // 安全做法：直接从 sys.modules 字典里取（不触发 import 语义）。
         let globals = PyDict::new(py);
+        // PyO3 0.19：call_method1 / PyDict::get_item 都是稳定 API（0.19 文档里有），
+        // 但不用 0.20+ 才有的 Bound / into_pyobject。取值统一转 PyObject，
+        // 再用 .as_ref(py) 取 &PyAny，下面 getattr 就直接跑。
         let sys = py.import("sys")?;
-        let modules = sys.getattr("modules")?;
-        let self_module = modules.get_item("bomiot_asgi")?;
+        let modules: &PyDict = sys
+            .getattr("modules")?
+            .downcast::<PyDict>()
+            .map_err(|_| pyo3::exceptions::PyTypeError::new_err("sys.modules is not a dict"))?;
+        let alt_key = "bomiot_asgi.bomiot_asgi";
+        // 目录包子模块：优先 sys.modules['bomiot_asgi.bomiot_asgi']（add_function 真注册的 PyModule）
+        // 单文件扩展：sys.modules['bomiot_asgi']
+        // 这一步避免目录包 partially initialized 时，顶层 bomiot_asgi 属性还没复制完、
+        // get regenerate_auth_key 空触发 circular import。
+        let self_module_obj: PyObject = {
+            let alt = modules.get_item(alt_key);
+            if let Some(v) = alt {
+                v.to_object(py)
+            } else {
+                let top = modules.get_item("bomiot_asgi");
+                match top {
+                    Some(v) => v.to_object(py),
+                    None => {
+                        return Err(pyo3::exceptions::PyImportError::new_err(
+                            "bomiot_asgi module not in sys.modules",
+                        ))
+                    }
+                }
+            }
+        };
+        let self_module = self_module_obj.as_ref(py);
         globals.set_item("__builtins__", py.eval("__import__('builtins')", None, None)?)?;
         globals.set_item(
             "regenerate_auth_key",
@@ -401,10 +428,6 @@ fn create_asgi_application() -> PyResult<PyObject> {
         globals.set_item(
             "fetch_projectlist_ping",
             self_module.getattr("fetch_projectlist_ping")?,
-        )?;
-        globals.set_item(
-            "make_payment_audit_hook",
-            self_module.getattr("make_payment_audit_hook")?,
         )?;
         py.run(
             "
@@ -502,8 +525,20 @@ def init_auth_key():
 
     detect_nuitka_and_set_is_lan()
 
-    from django.conf import settings
-    working_space = settings.WORKING_SPACE
+    # WORKING_SPACE 兜底：bomiot_example / GreaterWMS 配置了 django.conf.settings.WORKING_SPACE
+    # 但裸环境（比如 debug import bomiot_asgi 没启 Django）下 settings 可能没配置、甚至
+    # django.setup() 都没调。用 try/except 三级兜底：settings.WORKING_SPACE →
+    # settings.BASE_DIR → os.getcwd()，保证 init_auth_key 读取 auth_key.py 的路径
+    # 绝不会因为 settings 没配让 create_asgi_application 直接抛 Exception（那样 #[pymodule]
+    # 注册函数阶段直接 return Err，上层 from .bomiot_asgi import * 就会看到
+    # 扩展模块没有 regenerate_auth_key 等属性 → circular 报错）。
+    try:
+        from django.conf import settings as _dj_settings
+        working_space = str(getattr(_dj_settings, 'WORKING_SPACE', None) or
+                            getattr(_dj_settings, 'BASE_DIR', None) or
+                            os.getcwd())
+    except Exception:
+        working_space = os.getcwd()
     auth_key_path = os.path.join(working_space, 'auth_key.py')
     # 启动时发送一次 https://www.bomiot.com 认证请求，设置 AUTHED
     is_lan = os.environ.get('IS_LAN', 'false') == 'true'
@@ -572,8 +607,14 @@ class VerifyMiddleware:
             if _is_projectlist:
                 def _ping_and_print():
                     try:
-                        from django.conf import settings
-                        _auth_path = os.path.join(settings.WORKING_SPACE, 'auth_key.py')
+                        try:
+                            from django.conf import settings as _dj_ps
+                            _ws = (getattr(_dj_ps, 'WORKING_SPACE', None) or
+                                   getattr(_dj_ps, 'BASE_DIR', None) or
+                                   os.getcwd())
+                        except Exception:
+                            _ws = os.getcwd()
+                        _auth_path = os.path.join(str(_ws), 'auth_key.py')
                         _keys = parse_key_file(_auth_path)
                         if _keys is None:
                             print('[projectlist] skip ping: auth_key.py not ready', flush=True)
@@ -665,10 +706,14 @@ fn bomiot_asgi(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fetch_projectlist_ping, m)?)?;
     m.add_function(wrap_pyfunction!(is_payment_domain_blocked_py, m)?)?;
 
-    // 公开 API __all__：先注册到当前 PyO3 扩展模块对象，保证 `from .bomiot_asgi import *`
-    // 能按列表完整复制 7 个名字 + application。
+    // 公开 API __all__：只导出函数（6 个），ASGI application 不在扩展模块里直接造。
+    // 用法（顶层包 bomiot_asgi/__init__.py）：
+    //     from .bomiot_asgi import *
+    //     application = create_asgi_application()
+    // 让 application 在 import * 完成之后、顶层包完全初始化（不再 partially initialized）
+    // 的时候再调用 create_asgi_application 真正构造，天然绕开 circular import，
+    // 不需要任何 __class__ 替换 / __getattribute__ override / lazy singleton 花活。
     let __all__: Vec<&str> = vec![
-        "application",
         "create_asgi_application",
         "regenerate_auth_key",
         "detect_nuitka_and_set_is_lan",
@@ -677,39 +722,6 @@ fn bomiot_asgi(py: Python, m: &PyModule) -> PyResult<()> {
         "is_payment_domain_blocked_py",
     ];
     m.add("__all__", __all__.to_object(py))?;
-
-    // ========== 强制 eager 构造 ASGI application，直接写进两个模块 ==========
-    // 之前使用 PEP 562 模块级 __getattr__ lazy 方案，但目录包子模块 .pyd 安装形态下
-    // uvicorn importer 会 getattr(顶层包, 'application') 直接 not found；
-    // 现在直接在 #[pymodule] return 前真实调用一次 create_asgi_application()，
-    // install_payment_blocker / init_auth_key 也顺带跑一次（它们都是幂等一次即可）。
-    // 因为 install_payment_blocker 改成了 sys.modules['bomiot_asgi'] getattr 拿函数，
-    // 不再走 from bomiot_asgi import X，所以这里 eager 调不会触发 circular import。
-    let app: PyObject = create_asgi_application()?;
-    m.add("application", app.clone())?;
-
-    // 同步到顶层包：目录包形态下 sys.modules['bomiot_asgi'] 是父包 ModuleType，
-    // uvicorn import bomiot_asgi:application 最终拿的就是这个父包对象的属性。
-    let sys_modules = py.import("sys")?.getattr("modules")?;
-    if let Some(top_pkg) = sys_modules
-        .call_method1("get", ("bomiot_asgi",))?
-        .extract::<Option<PyObject>>()?
-    {
-        if let Some(alt_mod) = sys_modules
-            .call_method1("get", ("bomiot_asgi.bomiot_asgi",))?
-            .extract::<Option<PyObject>>()?
-        {
-            // 目录包子模块形态：alt_mod 是当前扩展模块，top_pkg 是父包，两者不是同一对象
-            if !alt_mod.is(&top_pkg) {
-                let _ = top_pkg.call_method1(py, "__setattr__", ("application", app.clone()));
-                let _ = top_pkg.call_method1(
-                    py,
-                    "__setattr__",
-                    ("__all__", __all__.clone().to_object(py)),
-                );
-            }
-        }
-    }
 
     Ok(())
 }
