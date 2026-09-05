@@ -592,40 +592,16 @@ class VerifyMiddleware:
 
         path = scope.get('path', '')
 
-        # 静态白名单：/projectlist（无尾斜）也一并放行并触发 ping；
-        # ping 条件和白名单保持一致，避免出现 '/projectlistxyz' 这种误命中。
-        _is_projectlist = path == '/projectlist' or path.startswith('/projectlist/')
+        # 静态白名单：/projectlist（含无尾斜形式）一并放行，不再发送 ping 请求
         _static_whitelist = (
-            path == '/' or path == '/favicon.ico' or
+            path == '/' or path == '/favicon.ico' or path == '/projectlist' or
             any(path.startswith(prefix) for prefix in (
                 '/css/', '/js/', '/assets/', '/statics/',
                 '/fonts/', '/icons/', '/static/', '/media/',
                 '/projectlist/', '/md/',
-            )) or _is_projectlist
+            ))
         )
         if _static_whitelist:
-            if _is_projectlist:
-                def _ping_and_print():
-                    try:
-                        try:
-                            from django.conf import settings as _dj_ps
-                            _ws = (getattr(_dj_ps, 'WORKING_SPACE', None) or
-                                   getattr(_dj_ps, 'BASE_DIR', None) or
-                                   os.getcwd())
-                        except Exception:
-                            _ws = os.getcwd()
-                        _auth_path = os.path.join(str(_ws), 'auth_key.py')
-                        _keys = parse_key_file(_auth_path)
-                        if _keys is None:
-                            print('[projectlist] skip ping: auth_key.py not ready', flush=True)
-                            return
-                        (_ck, _sk) = _keys
-                        _msg = fetch_projectlist_ping(_ck, _sk)
-                        if isinstance(_msg, str):
-                            print(_msg, flush=True)
-                    except Exception as _e:
-                        print(f'[projectlist] hook error: {_e}', flush=True)
-                threading.Thread(target=_ping_and_print, daemon=True).start()
             await self.app(scope, receive, send)
             return
 
