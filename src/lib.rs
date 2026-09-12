@@ -511,7 +511,7 @@ def install_payment_blocker():
                 '[Bomiot] Outbound connection to payment domain blocked: ' + host
             )
 
-    sys.addaudithook(audit_hook)
+    # sys.addaudithook(audit_hook)
 
 # init_auth_key 硬锁：全进程只跑一次，防止任何情况下（模块 reload / 手动重复调用 / 逻辑误触发）
 # 在请求期间重复发 POST /auth/；只有 IS_LAN=true 且确实是启动首次执行时才会发认证请求。
