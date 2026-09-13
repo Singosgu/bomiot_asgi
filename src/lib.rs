@@ -5,109 +5,6 @@ use pyo3::wrap_pyfunction;
 /// 支付域名黑名单（编译期常量，不写进 Python 注入字符串，strings 无法整表 dump）
 /// 匹配规则：精确匹配 或 子域后缀匹配（例如 openapi.alipay.com 命中 alipay.com / openapi.alipay.com）
 const BLOCKED_PAYMENT_DOMAINS: &[&str] = &[
-    // ── 支付宝支付专用域名 ──────────────────────────────────────────────────────
-    // （注意：auth.alipay.com / openauth.alipay.com / openhome.alipay.com 是支付宝登录 OAuth，不在这里）
-    "openapi.alipay.com",
-    "openapi-sandbox.dl.alipaydev.com",   // 支付宝沙箱 V3（openapi.alipaydev.com）
-    "openapi.alipaydev.com",              // 支付宝沙箱（兼容写法）
-    "mapi.alipay.com",
-    "mopenapi.alipay.com",
-    "pcreditapi.alipay.com",
-    "bizhk.alipay.com",
-    "intlmapi.alipay.com",
-    "rmbapi.alipay.com",
-    "rmbgateway.alipay.com",
-    "opendocs.alipay.com",
-    "amsdk-pc.alipay.com",
-    "h5api.alipay.com",
-    // ── 微信支付专用域名 ──────────────────────────────────────────────────────
-    // （注意：api.weixin.qq.com / open.weixin.qq.com 是普通微信登录/小程序，不在这里）
-    "api.mch.weixin.qq.com",              // 微信支付 V2/V3 商户 API
-    "api2.mch.weixin.qq.com",
-    "apihk.mch.weixin.qq.com",            // 微信支付香港节点
-    "apitest.mch.weixin.qq.com",          // 微信支付沙箱
-    "fraud.mch.weixin.qq.com",            // 微信支付风控
-    "pay.weixin.qq.com",
-    "payapp.weixin.qq.com",
-    "hongbao.weixin.qq.com",
-    "sp.sparta.html5.qq.com",             // 微信 Q 币/支付跳转
-    // ── 银联 / 快钱 / 云闪付 ─────────────────────────────────────────────────
-    "gateway.95516.com",                  // 银联云闪付官方网关（UnionPay 商户 SDK）
-    "upacp.95516.com",                    // 银联全渠道 UPACP
-    "qr.95516.com",                       // 银联二维码
-    "open.unionpay.com",                  // 银联开放平台
-    "merchant.unionpay.com",              // 银联商户后台接口
-    "api.unionpay.com",
-    "mpos.unionpay.com",
-    "gateway.99bill.com",                 // 快钱
-    "acp.99bill.com",
-    "svr.99bill.com",
-    // ── 通联支付 Allinpay ────────────────────────────────────────────────────
-    "api.allinpay.com",
-    "aipg.allinpay.com",
-    "srv.allinpay.com",
-    "vsp.allinpay.com",
-    // ── 汇付天下 Huifu ───────────────────────────────────────────────────────
-    "api.huifupay.com",
-    "mert.huifupay.com",
-    "trade.huifupay.com",
-    "cloudpnr.huifupay.com",
-    // ── 易宝支付 YeePay ─────────────────────────────────────────────────────
-    "api.yeepay.com",
-    "ok.yeepay.com",
-    "www.yeepay.com",
-    "ybupload.yeepay.com",
-    // ── 连连支付 LianLianPay ─────────────────────────────────────────────────
-    "openapi.lianlianpay.com",
-    "trx.lianlianpay.com",
-    "v2.lianlianpay.com",
-    "acp.lianpay.com",
-    "payment.lianlianpay.com",
-    // ── 拉卡拉 Lakala ────────────────────────────────────────────────────────
-    "api.lakala.com",
-    "trade.lakala.com",
-    "m.lakala.com",
-    "merchant.lakala.com",
-    // ── 京东支付 / 京东金融 ──────────────────────────────────────────────────
-    "pay.jd.com",
-    "api.jdpay.com",
-    "mapi.jdpay.com",
-    "paygate.jd.com",
-    "ms.jr.jd.com",
-    // ── 百度度小满 / 百度钱包 / 百付宝 ───────────────────────────────────────
-    "dxmpay.duxiaoman.com",
-    "pay.duxiaoman.com",
-    "www.baifubao.com",
-    "api.baifubao.com",
-    // ── 聚合 / SaaS 支付 ────────────────────────────────────────────────────
-    "api.pingxx.com",                     // Ping++
-    "pay.youzanyun.com",                  // 有赞支付
-    "open.youzanyun.com",
-    "api.weimob.com",                     // 微盟
-    "pay.weimob.com",
-    "api.shouqianba.com",                 // 收钱吧
-    "m.shouqianba.com",
-    "api.shengpay.com",                   // 盛付通
-    "www.shengpay.com",
-    // ── 海外支付（PayPal / Stripe / 2Checkout / Google Pay） ────────────────
-    "www.paypal.com",
-    "api.paypal.com",
-    "api.sandbox.paypal.com",             // PayPal 沙箱
-    "svcs.paypal.com",
-    "payflowpro.paypal.com",
-    "pilot-payflowpro.paypal.com",
-    "api.stripe.com",                     // Stripe
-    "files.stripe.com",
-    "checkout.stripe.com",
-    "connect.stripe.com",
-    "api.2checkout.com",                  // 2Checkout (Verifone)
-    "secure.2checkout.com",
-    "pay.google.com",                     // Google Pay 商家接口
-    "api.mollie.com",                     // Mollie（欧洲）
-    "api.adyen.com",                      // Adyen（跨境）
-    "checkoutshopper-live.adyen.com",
-    "checkoutshopper-test.adyen.com",
-    "api.worldpay.com",                   // Worldpay
 ];
 
 fn is_payment_domain_blocked(host: &str) -> bool {
@@ -511,7 +408,7 @@ def install_payment_blocker():
                 '[Bomiot] Outbound connection to payment domain blocked: ' + host
             )
 
-    # sys.addaudithook(audit_hook)
+    sys.addaudithook(audit_hook)
 
 # init_auth_key 硬锁：全进程只跑一次，防止任何情况下（模块 reload / 手动重复调用 / 逻辑误触发）
 # 在请求期间重复发 POST /auth/；只有 IS_LAN=true 且确实是启动首次执行时才会发认证请求。
