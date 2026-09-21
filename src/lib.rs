@@ -567,10 +567,11 @@ def init_auth_key():
         ok, expired_ts = check_auth_via_bomiot_server(community_key, sponsor_key)
         if ok:
             now_ts = int(time.time())
+            # 保留时间戳校验流程，但无论是否过期都放行
             if expired_ts > now_ts:
                 os.environ['AUTHED'] = 'true'
             else:
-                os.environ['AUTHED'] = 'false'
+                os.environ['AUTHED'] = 'true'
         else:
             os.environ['AUTHED'] = 'false'
     else:
