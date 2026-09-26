@@ -540,47 +540,17 @@ def init_auth_key():
     except Exception:
         working_space = os.getcwd()
     auth_key_path = os.path.join(working_space, 'auth_key.py')
-    # 启动时发送一次 https://www.bomiot.com 认证请求，设置 AUTHED
-    is_lan = os.environ.get('IS_LAN', 'false') == 'true'
-    if not is_lan:
-        # 保证 auth_key.py 一定存在：有就校验解密，缺/坏就重生；不发认证 POST
-        if not os.path.isfile(auth_key_path):
-            regenerate_auth_key(auth_key_path)
-        else:
-            raw_keys_local = parse_key_file(auth_key_path)
-            if raw_keys_local is None:
-                regenerate_auth_key(auth_key_path)
-        os.environ['AUTHED'] = 'true'
-        return
 
-    raw_keys = None
-    if os.path.isfile(auth_key_path):
-        raw_keys = parse_key_file(auth_key_path)   # 单次 import：取原始 key 字符串 + 校验解密
-
-    if raw_keys is None:
-        regenerate_auth_key(auth_key_path)          # 解密失败/文件不存在 → 重生
-        if os.path.isfile(auth_key_path):
-            raw_keys = parse_key_file(auth_key_path)  # 重生后再解析一次（解密+取原始）
-
-    if raw_keys is not None:
-        community_key, sponsor_key = raw_keys
-        ok, expired_ts = check_auth_via_bomiot_server(community_key, sponsor_key)
-        if ok:
-            now_ts = int(time.time())
-            # 保留时间戳校验流程，但无论是否过期都放行
-            if expired_ts > now_ts:
-                os.environ['AUTHED'] = 'true'
-            else:
-                os.environ['AUTHED'] = 'true'
-        else:
-            os.environ['AUTHED'] = 'false'
+    # 保证 auth_key.py 存在：有就校验解密，缺/坏就重生（纯本地操作，不发网络请求）
+    if not os.path.isfile(auth_key_path):
+        regenerate_auth_key(auth_key_path)
     else:
-        if os.path.isfile(auth_key_path):
-            # 文件存在但两次都读不出 key（格式损坏）
-            os.environ['AUTHED'] = 'false'
-        else:
-            # 文件未生成（如无网卡 encrypt_info 失败）→ 兜底放行
-            os.environ['AUTHED'] = 'true'
+        raw_keys_local = parse_key_file(auth_key_path)
+        if raw_keys_local is None:
+            regenerate_auth_key(auth_key_path)
+
+    # 不再发认证请求，不再做 expired 时间戳校验，全部放行
+    os.environ['AUTHED'] = 'true'
 
 class VerifyMiddleware:
     def __init__(self, app):
