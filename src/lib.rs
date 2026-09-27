@@ -475,6 +475,23 @@ def parse_key_file(file_path):
         print(f'[Warning] Failed to parse {os.path.basename(file_path)}: {e}')
         return None
 
+def parse_build_json(file_path):
+    # 从 build.json 读取 COMMUNITY_KEY / SPONSOR_KEY
+    if not os.path.isfile(file_path):
+        return None
+    try:
+        import json as _json
+        with open(file_path, 'r', encoding='utf-8') as _f:
+            _data = _json.load(_f)
+        _ck = _data.get('COMMUNITY_KEY')
+        _sk = _data.get('SPONSOR_KEY')
+        if not _ck or not _sk:
+            return None
+        return (str(_ck), str(_sk))
+    except Exception as e:
+        print(f'[Warning] Failed to parse {os.path.basename(file_path)}: {e}')
+        return None
+
 def install_payment_blocker():
     import sys
     try:
@@ -553,34 +570,23 @@ def init_auth_key():
         os.environ['AUTHED'] = 'true'
         return
 
-    raw_keys = None
-    if os.path.isfile(auth_key_path):
-        raw_keys = parse_key_file(auth_key_path)   # 单次 import：取原始 key 字符串 + 校验解密
-
-    if raw_keys is None:
-        regenerate_auth_key(auth_key_path)          # 解密失败/文件不存在 → 重生
-        if os.path.isfile(auth_key_path):
-            raw_keys = parse_key_file(auth_key_path)  # 重生后再解析一次（解密+取原始）
+    build_json_path = os.path.join(working_space, 'build.json')
+    raw_keys = parse_build_json(build_json_path)
 
     if raw_keys is not None:
         community_key, sponsor_key = raw_keys
         ok, expired_ts = check_auth_via_bomiot_server(community_key, sponsor_key)
         if ok:
             now_ts = int(time.time())
-            # 保留时间戳校验流程，但无论是否过期都放行
             if expired_ts > now_ts:
                 os.environ['AUTHED'] = 'true'
             else:
-                os.environ['AUTHED'] = 'true'
+                os.environ['AUTHED'] = 'false'
         else:
             os.environ['AUTHED'] = 'false'
     else:
-        if os.path.isfile(auth_key_path):
-            # 文件存在但两次都读不出 key（格式损坏）
-            os.environ['AUTHED'] = 'false'
-        else:
-            # 文件未生成（如无网卡 encrypt_info 失败）→ 兜底放行
-            os.environ['AUTHED'] = 'true'
+        # build.json 不存在或解析失败 → 不放行
+        os.environ['AUTHED'] = 'false'
 
 class VerifyMiddleware:
     def __init__(self, app):
