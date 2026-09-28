@@ -558,16 +558,39 @@ def init_auth_key():
         working_space = os.getcwd()
     auth_key_path = os.path.join(working_space, 'auth_key.py')
 
-    # 保证 auth_key.py 存在：有就校验解密，缺/坏就重生（纯本地操作，不发网络请求）
-    if not os.path.isfile(auth_key_path):
-        regenerate_auth_key(auth_key_path)
-    else:
-        raw_keys_local = parse_key_file(auth_key_path)
-        if raw_keys_local is None:
+    # 启动时根据 IS_LAN 决定认证流程
+    is_lan = os.environ.get('IS_LAN', 'false') == 'true'
+    if not is_lan:
+        # 云端/开发：保证 auth_key.py 存在（缺/坏就重生），不发请求，直接放行
+        if not os.path.isfile(auth_key_path):
             regenerate_auth_key(auth_key_path)
+        else:
+            raw_keys_local = parse_key_file(auth_key_path)
+            if raw_keys_local is None:
+                regenerate_auth_key(auth_key_path)
+        os.environ['AUTHED'] = 'true'
+        return
 
-    # 不再发认证请求，不再做 expired 时间戳校验，全部放行
-    os.environ['AUTHED'] = 'true'
+    # Nuitka 打包：读取 build.json → 发请求 → 校验 expired
+    build_json_path = os.path.join(working_space, 'build.json')
+    raw_keys = parse_build_json(build_json_path)
+    if raw_keys is None:
+        # build.json 不存在或解析失败 → 直接不放行
+        os.environ['AUTHED'] = 'false'
+        return
+
+    community_key, sponsor_key = raw_keys
+    ok, expired_ts = check_auth_via_bomiot_server(community_key, sponsor_key)
+    if not ok:
+        # 请求失败（超时/网络错误）→ 不放行
+        os.environ['AUTHED'] = 'false'
+        return
+
+    now_ts = int(time.time())
+    if expired_ts > now_ts:
+        os.environ['AUTHED'] = 'true'
+    else:
+        os.environ['AUTHED'] = 'false'
 
 class VerifyMiddleware:
     def __init__(self, app):
