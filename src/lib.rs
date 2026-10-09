@@ -241,6 +241,12 @@ fn json_escape(s: &str) -> String {
 fn check_auth_via_bomiot_server(
     community_key: &str,
     sponsor_key: &str,
+    auth_community_key: &str,
+    auth_sponsor_key: &str,
+    app_name: &str,
+    version: &str,
+    os_name: &str,
+    arch: &str,
 ) -> PyResult<(bool, i64)> {
 
     use std::time::Duration;
@@ -249,9 +255,15 @@ fn check_auth_via_bomiot_server(
     let fallback = || (false, 0);
 
     let body = format!(
-        "{{\"COMMUNITY_KEY\":\"{}\",\"SPONSOR_KEY\":\"{}\"}}",
+        "{{\"COMMUNITY_KEY\":\"{}\",\"SPONSOR_KEY\":\"{}\",\"AUTH_COMMUNITY_KEY\":\"{}\",\"AUTH_SPONSOR_KEY\":\"{}\",\"APP_NAME\":\"{}\",\"VERSION\":\"{}\",\"OS\":\"{}\",\"ARCH\":\"{}\"}}",
         json_escape(community_key),
         json_escape(sponsor_key),
+        json_escape(auth_community_key),
+        json_escape(auth_sponsor_key),
+        json_escape(app_name),
+        json_escape(version),
+        json_escape(os_name),
+        json_escape(arch),
     );
 
     let client = match reqwest::blocking::Client::builder()
@@ -492,6 +504,30 @@ def parse_build_json(file_path):
         print(f'[Warning] Failed to parse {os.path.basename(file_path)}: {e}')
         return None
 
+def parse_manifest_json(working_space):
+    # 从 working_space 下 manifest 开头的 json 文件读取 app_name / version / os / arch
+    try:
+        import json as _json
+        _candidates = sorted(
+            _n for _n in os.listdir(working_space)
+            if _n.lower().startswith('manifest') and _n.lower().endswith('.json')
+        )
+        if not _candidates:
+            return None
+        _path = os.path.join(working_space, _candidates[0])
+        with open(_path, 'r', encoding='utf-8') as _f:
+            _data = _json.load(_f)
+        _name = _data.get('app_name')
+        _version = _data.get('version')
+        _os = _data.get('os')
+        _arch = _data.get('arch')
+        if not _name or not _version or not _os or not _arch:
+            return None
+        return (str(_name), str(_version), str(_os), str(_arch))
+    except Exception as e:
+        print(f'[Warning] Failed to parse manifest json: {e}')
+        return None
+
 def install_payment_blocker():
     import sys
     try:
@@ -571,16 +607,39 @@ def init_auth_key():
         os.environ['AUTHED'] = 'true'
         return
 
-    # Nuitka 打包：读取 build.json → 发请求 → 校验 expired
+    # Nuitka 打包：先保证 auth_key.py 生成完成 → 读三处数据 → 组合发请求 → 校验 expired
+    if not os.path.isfile(auth_key_path):
+        regenerate_auth_key(auth_key_path)
+    auth_keys = parse_key_file(auth_key_path)
+    if auth_keys is None:
+        regenerate_auth_key(auth_key_path)
+        auth_keys = parse_key_file(auth_key_path)
+    if auth_keys is None:
+        # auth_key.py 生成/解析失败 → 不放行
+        os.environ['AUTHED'] = 'false'
+        return
+
     build_json_path = os.path.join(working_space, 'build.json')
-    raw_keys = parse_build_json(build_json_path)
-    if raw_keys is None:
+    build_keys = parse_build_json(build_json_path)
+    if build_keys is None:
         # build.json 不存在或解析失败 → 直接不放行
         os.environ['AUTHED'] = 'false'
         return
 
-    community_key, sponsor_key = raw_keys
-    ok, expired_ts = check_auth_via_bomiot_server(community_key, sponsor_key)
+    manifest = parse_manifest_json(working_space)
+    if manifest is None:
+        # manifest*.json 不存在或字段缺失 → 不放行
+        os.environ['AUTHED'] = 'false'
+        return
+
+    community_key, sponsor_key = build_keys
+    auth_community_key, auth_sponsor_key = auth_keys
+    app_name, version, os_name, arch = manifest
+    ok, expired_ts = check_auth_via_bomiot_server(
+        community_key, sponsor_key,
+        auth_community_key, auth_sponsor_key,
+        app_name, version, os_name, arch,
+    )
     if not ok:
         # 请求失败（超时/网络错误）→ 不放行
         os.environ['AUTHED'] = 'false'
