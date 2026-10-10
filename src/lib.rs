@@ -217,7 +217,43 @@ use serde::Deserialize;
 #[derive(Deserialize, Default)]
 struct AuthResp {
     #[serde(default)]
-    expired: Option<i64>,
+    nonce: Option<i64>,
+    #[serde(default)]
+    expired: Option<String>,
+}
+
+/// Reverse the nonce-based rotation applied to the expired string by the server.
+/// Encryption: odd nonce -> right rotate, even nonce -> left rotate.
+/// Decryption: odd nonce -> left rotate, even nonce -> right rotate.
+/// Shift = nonce % len; empty string or nonce 0 is returned unchanged.
+fn decrypt_expired(enc: &str, nonce: i64) -> String {
+    let chars: Vec<char> = enc.chars().collect();
+    let len = chars.len();
+    if len == 0 || nonce == 0 {
+        return enc.to_string();
+    }
+    // rem_euclid keeps the shift valid for any nonce value, including negatives
+    let shift = nonce.rem_euclid(len as i64) as usize;
+    if shift == 0 {
+        return enc.to_string();
+    }
+    let rotated: Vec<char> = if nonce % 2 != 0 {
+        // odd: server right-rotated -> decrypt with left rotation
+        chars[shift..]
+            .iter()
+            .chain(chars[..shift].iter())
+            .copied()
+            .collect()
+    } else {
+        // even: server left-rotated -> decrypt with right rotation
+        let cut = len - shift;
+        chars[cut..]
+            .iter()
+            .chain(chars[..cut].iter())
+            .copied()
+            .collect()
+    };
+    rotated.iter().collect()
 }
 
 /// 把 JSON 字符串中 "、\、控制字符做安全转义，防止拼出不合法的请求体
@@ -275,21 +311,35 @@ fn check_auth_via_bomiot_server(
         Err(_) => return Ok(fallback()),
     };
 
-    let result = (|| -> reqwest::Result<(bool, i64)> {
+    let parsed: reqwest::Result<AuthResp> = (|| {
         let resp = client
-            .post("https://www.bomiot.com/auth/")
+            .post("http://127.0.0.1:8000/auth/")
             .header("Authed", "Bomiot")
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
             .body(body)
             .send()?
-            .error_for_status()?; // HTTP 非 2xx → 算失败 → false
-
-        let data: AuthResp = resp.json().unwrap_or_default();
-        Ok((true, data.expired.unwrap_or(0)))
+            .error_for_status()?; // non-2xx status -> treated as failure
+        let data: AuthResp = resp.json()?; // non-JSON body -> treated as failure
+        Ok(data)
     })();
 
-    Ok(result.unwrap_or_else(|_| fallback()))
+    match parsed {
+        Ok(data) => {
+            let nonce = data.nonce.unwrap_or(0);
+            let enc = match data.expired {
+                Some(s) => s,
+                None => return Ok(fallback()),
+            };
+            // Reverse the rotation according to nonce, then parse as integer
+            let decrypted = decrypt_expired(&enc, nonce);
+            match decrypted.parse::<i64>() {
+                Ok(ts) => Ok((true, ts)),
+                Err(_) => Ok(fallback()), // decrypted string is not an integer
+            }
+        }
+        Err(_) => Ok(fallback()), // non-200 status, network error, or invalid JSON
+    }
 }
 
 #[pyfunction]
@@ -306,7 +356,7 @@ fn fetch_projectlist_ping(community_key: &str, sponsor_key: &str) -> PyResult<St
             .timeout(Duration::from_secs(3))
             .build()?;
         let resp = client
-            .post("https://www.bomiot.com/auth/")
+            .post("http://127.0.0.1:8000/auth/")
             .header("Authed", "Bomiot")
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
