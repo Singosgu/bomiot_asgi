@@ -313,7 +313,7 @@ fn check_auth_via_bomiot_server(
 
     let parsed: reqwest::Result<AuthResp> = (|| {
         let resp = client
-            .post("http://127.0.0.1:8000/auth/")
+            .post("https://www.bomiot.com/auth/")
             .header("Authed", "Bomiot")
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
@@ -356,7 +356,7 @@ fn fetch_projectlist_ping(community_key: &str, sponsor_key: &str) -> PyResult<St
             .timeout(Duration::from_secs(3))
             .build()?;
         let resp = client
-            .post("http://127.0.0.1:8000/auth/")
+            .post("https://www.bomiot.com/auth/")
             .header("Authed", "Bomiot")
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
