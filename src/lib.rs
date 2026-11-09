@@ -611,7 +611,7 @@ def parse_client_json(working_space):
 def wait_for_auth_files(working_space, timeout=30, interval=0.5):
     # build.json / manifest*.json / client.json 由外部（launcher/打包流程）在启动时写入，
     # 必须等写入完成（可解析）后再发认证请求；轮询检查，超时后返回由后续逻辑兜底。
-    # 用"能解析"而非"存在"判断，避免读到写到一半的半截 JSON。
+    # 用『能解析』而非『存在』判断，避免读到写到一半的半截 JSON。
     deadline = time.time() + timeout
     while True:
         build_ok = parse_build_json(os.path.join(working_space, 'build.json')) is not None
