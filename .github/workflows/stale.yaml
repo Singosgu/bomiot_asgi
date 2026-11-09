@@ -48,7 +48,7 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
         target: [x64]
     steps:
       - uses: actions/checkout@v4
@@ -86,11 +86,11 @@ jobs:
           name: wheels-${{ github.job }}-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
   linux-latest:
-    # ubuntu-latest 已升级到 26.04，setup-python 尚无 3.9 包，固定 24.04
+    # ubuntu-latest 已升级到 26.04，setup-python 尚无 包，固定 24.04
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
         target: [x86_64]
     steps:
       - uses: actions/checkout@v4
@@ -144,11 +144,11 @@ jobs:
           name: wheels-${{ github.job }}-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
   linux-latest-aarch64:
-    # ubuntu-latest 已升级到 26.04，setup-python 尚无 3.9 包，固定 24.04
+    # ubuntu-latest 已升级到 26.04，setup-python 尚无  包，固定 24.04
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -177,7 +177,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
