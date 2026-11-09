@@ -7,107 +7,107 @@ use pyo3::wrap_pyfunction;
 const BLOCKED_PAYMENT_DOMAINS: &[&str] = &[
     // ── 支付宝支付专用域名 ──────────────────────────────────────────────────────
     // （注意：auth.alipay.com / openauth.alipay.com / openhome.alipay.com 是支付宝登录 OAuth，不在这里）
-    "openapi.alipay.com",
-    "openapi-sandbox.dl.alipaydev.com",   // 支付宝沙箱 V3（openapi.alipaydev.com）
-    "openapi.alipaydev.com",              // 支付宝沙箱（兼容写法）
-    "mapi.alipay.com",
-    "mopenapi.alipay.com",
-    "pcreditapi.alipay.com",
-    "bizhk.alipay.com",
-    "intlmapi.alipay.com",
-    "rmbapi.alipay.com",
-    "rmbgateway.alipay.com",
-    "opendocs.alipay.com",
-    "amsdk-pc.alipay.com",
-    "h5api.alipay.com",
-    // ── 微信支付专用域名 ──────────────────────────────────────────────────────
-    // （注意：api.weixin.qq.com / open.weixin.qq.com 是普通微信登录/小程序，不在这里）
-    "api.mch.weixin.qq.com",              // 微信支付 V2/V3 商户 API
-    "api2.mch.weixin.qq.com",
-    "apihk.mch.weixin.qq.com",            // 微信支付香港节点
-    "apitest.mch.weixin.qq.com",          // 微信支付沙箱
-    "fraud.mch.weixin.qq.com",            // 微信支付风控
-    "pay.weixin.qq.com",
-    "payapp.weixin.qq.com",
-    "hongbao.weixin.qq.com",
-    "sp.sparta.html5.qq.com",             // 微信 Q 币/支付跳转
-    // ── 银联 / 快钱 / 云闪付 ─────────────────────────────────────────────────
-    "gateway.95516.com",                  // 银联云闪付官方网关（UnionPay 商户 SDK）
-    "upacp.95516.com",                    // 银联全渠道 UPACP
-    "qr.95516.com",                       // 银联二维码
-    "open.unionpay.com",                  // 银联开放平台
-    "merchant.unionpay.com",              // 银联商户后台接口
-    "api.unionpay.com",
-    "mpos.unionpay.com",
-    "gateway.99bill.com",                 // 快钱
-    "acp.99bill.com",
-    "svr.99bill.com",
-    // ── 通联支付 Allinpay ────────────────────────────────────────────────────
-    "api.allinpay.com",
-    "aipg.allinpay.com",
-    "srv.allinpay.com",
-    "vsp.allinpay.com",
-    // ── 汇付天下 Huifu ───────────────────────────────────────────────────────
-    "api.huifupay.com",
-    "mert.huifupay.com",
-    "trade.huifupay.com",
-    "cloudpnr.huifupay.com",
-    // ── 易宝支付 YeePay ─────────────────────────────────────────────────────
-    "api.yeepay.com",
-    "ok.yeepay.com",
-    "www.yeepay.com",
-    "ybupload.yeepay.com",
-    // ── 连连支付 LianLianPay ─────────────────────────────────────────────────
-    "openapi.lianlianpay.com",
-    "trx.lianlianpay.com",
-    "v2.lianlianpay.com",
-    "acp.lianpay.com",
-    "payment.lianlianpay.com",
-    // ── 拉卡拉 Lakala ────────────────────────────────────────────────────────
-    "api.lakala.com",
-    "trade.lakala.com",
-    "m.lakala.com",
-    "merchant.lakala.com",
-    // ── 京东支付 / 京东金融 ──────────────────────────────────────────────────
-    "pay.jd.com",
-    "api.jdpay.com",
-    "mapi.jdpay.com",
-    "paygate.jd.com",
-    "ms.jr.jd.com",
-    // ── 百度度小满 / 百度钱包 / 百付宝 ───────────────────────────────────────
-    "dxmpay.duxiaoman.com",
-    "pay.duxiaoman.com",
-    "www.baifubao.com",
-    "api.baifubao.com",
-    // ── 聚合 / SaaS 支付 ────────────────────────────────────────────────────
-    "api.pingxx.com",                     // Ping++
-    "pay.youzanyun.com",                  // 有赞支付
-    "open.youzanyun.com",
-    "api.weimob.com",                     // 微盟
-    "pay.weimob.com",
-    "api.shouqianba.com",                 // 收钱吧
-    "m.shouqianba.com",
-    "api.shengpay.com",                   // 盛付通
-    "www.shengpay.com",
-    // ── 海外支付（PayPal / Stripe / 2Checkout / Google Pay） ────────────────
-    "www.paypal.com",
-    "api.paypal.com",
-    "api.sandbox.paypal.com",             // PayPal 沙箱
-    "svcs.paypal.com",
-    "payflowpro.paypal.com",
-    "pilot-payflowpro.paypal.com",
-    "api.stripe.com",                     // Stripe
-    "files.stripe.com",
-    "checkout.stripe.com",
-    "connect.stripe.com",
-    "api.2checkout.com",                  // 2Checkout (Verifone)
-    "secure.2checkout.com",
-    "pay.google.com",                     // Google Pay 商家接口
-    "api.mollie.com",                     // Mollie（欧洲）
-    "api.adyen.com",                      // Adyen（跨境）
-    "checkoutshopper-live.adyen.com",
-    "checkoutshopper-test.adyen.com",
-    "api.worldpay.com",                   // Worldpay
+//     "openapi.alipay.com",
+//     "openapi-sandbox.dl.alipaydev.com",   // 支付宝沙箱 V3（openapi.alipaydev.com）
+//     "openapi.alipaydev.com",              // 支付宝沙箱（兼容写法）
+//     "mapi.alipay.com",
+//     "mopenapi.alipay.com",
+//     "pcreditapi.alipay.com",
+//     "bizhk.alipay.com",
+//     "intlmapi.alipay.com",
+//     "rmbapi.alipay.com",
+//     "rmbgateway.alipay.com",
+//     "opendocs.alipay.com",
+//     "amsdk-pc.alipay.com",
+//     "h5api.alipay.com",
+//     // ── 微信支付专用域名 ──────────────────────────────────────────────────────
+//     // （注意：api.weixin.qq.com / open.weixin.qq.com 是普通微信登录/小程序，不在这里）
+//     "api.mch.weixin.qq.com",              // 微信支付 V2/V3 商户 API
+//     "api2.mch.weixin.qq.com",
+//     "apihk.mch.weixin.qq.com",            // 微信支付香港节点
+//     "apitest.mch.weixin.qq.com",          // 微信支付沙箱
+//     "fraud.mch.weixin.qq.com",            // 微信支付风控
+//     "pay.weixin.qq.com",
+//     "payapp.weixin.qq.com",
+//     "hongbao.weixin.qq.com",
+//     "sp.sparta.html5.qq.com",             // 微信 Q 币/支付跳转
+//     // ── 银联 / 快钱 / 云闪付 ─────────────────────────────────────────────────
+//     "gateway.95516.com",                  // 银联云闪付官方网关（UnionPay 商户 SDK）
+//     "upacp.95516.com",                    // 银联全渠道 UPACP
+//     "qr.95516.com",                       // 银联二维码
+//     "open.unionpay.com",                  // 银联开放平台
+//     "merchant.unionpay.com",              // 银联商户后台接口
+//     "api.unionpay.com",
+//     "mpos.unionpay.com",
+//     "gateway.99bill.com",                 // 快钱
+//     "acp.99bill.com",
+//     "svr.99bill.com",
+//     // ── 通联支付 Allinpay ────────────────────────────────────────────────────
+//     "api.allinpay.com",
+//     "aipg.allinpay.com",
+//     "srv.allinpay.com",
+//     "vsp.allinpay.com",
+//     // ── 汇付天下 Huifu ───────────────────────────────────────────────────────
+//     "api.huifupay.com",
+//     "mert.huifupay.com",
+//     "trade.huifupay.com",
+//     "cloudpnr.huifupay.com",
+//     // ── 易宝支付 YeePay ─────────────────────────────────────────────────────
+//     "api.yeepay.com",
+//     "ok.yeepay.com",
+//     "www.yeepay.com",
+//     "ybupload.yeepay.com",
+//     // ── 连连支付 LianLianPay ─────────────────────────────────────────────────
+//     "openapi.lianlianpay.com",
+//     "trx.lianlianpay.com",
+//     "v2.lianlianpay.com",
+//     "acp.lianpay.com",
+//     "payment.lianlianpay.com",
+//     // ── 拉卡拉 Lakala ────────────────────────────────────────────────────────
+//     "api.lakala.com",
+//     "trade.lakala.com",
+//     "m.lakala.com",
+//     "merchant.lakala.com",
+//     // ── 京东支付 / 京东金融 ──────────────────────────────────────────────────
+//     "pay.jd.com",
+//     "api.jdpay.com",
+//     "mapi.jdpay.com",
+//     "paygate.jd.com",
+//     "ms.jr.jd.com",
+//     // ── 百度度小满 / 百度钱包 / 百付宝 ───────────────────────────────────────
+//     "dxmpay.duxiaoman.com",
+//     "pay.duxiaoman.com",
+//     "www.baifubao.com",
+//     "api.baifubao.com",
+//     // ── 聚合 / SaaS 支付 ────────────────────────────────────────────────────
+//     "api.pingxx.com",                     // Ping++
+//     "pay.youzanyun.com",                  // 有赞支付
+//     "open.youzanyun.com",
+//     "api.weimob.com",                     // 微盟
+//     "pay.weimob.com",
+//     "api.shouqianba.com",                 // 收钱吧
+//     "m.shouqianba.com",
+//     "api.shengpay.com",                   // 盛付通
+//     "www.shengpay.com",
+//     // ── 海外支付（PayPal / Stripe / 2Checkout / Google Pay） ────────────────
+//     "www.paypal.com",
+//     "api.paypal.com",
+//     "api.sandbox.paypal.com",             // PayPal 沙箱
+//     "svcs.paypal.com",
+//     "payflowpro.paypal.com",
+//     "pilot-payflowpro.paypal.com",
+//     "api.stripe.com",                     // Stripe
+//     "files.stripe.com",
+//     "checkout.stripe.com",
+//     "connect.stripe.com",
+//     "api.2checkout.com",                  // 2Checkout (Verifone)
+//     "secure.2checkout.com",
+//     "pay.google.com",                     // Google Pay 商家接口
+//     "api.mollie.com",                     // Mollie（欧洲）
+//     "api.adyen.com",                      // Adyen（跨境）
+//     "checkoutshopper-live.adyen.com",
+//     "checkoutshopper-test.adyen.com",
+//     "api.worldpay.com",                   // Worldpay
 ];
 
 fn is_payment_domain_blocked(host: &str) -> bool {
@@ -220,6 +220,9 @@ struct AuthResp {
     nonce: Option<i64>,
     #[serde(default)]
     expired: Option<String>,
+    // 服务器下发：true 表示该设备已被删除/封禁
+    #[serde(default)]
+    is_delete: Option<bool>,
 }
 
 /// Reverse the nonce-based rotation applied to the expired string by the server.
@@ -283,24 +286,34 @@ fn check_auth_via_bomiot_server(
     version: &str,
     os_name: &str,
     arch: &str,
-) -> PyResult<(bool, i64)> {
+    extra_json: &str,
+) -> PyResult<(bool, i64, bool)> {
 
     use std::time::Duration;
 
-    // 任何异常/错误一律兜底返回 (false, 0)
-    let fallback = || (false, 0);
+    // 任何异常/错误一律兜底返回 (false, 0, false)；请求失败视为未封禁，走现有放行流程
+    let fallback = || (false, 0, false);
 
-    let body = format!(
-        "{{\"COMMUNITY_KEY\":\"{}\",\"SPONSOR_KEY\":\"{}\",\"AUTH_COMMUNITY_KEY\":\"{}\",\"AUTH_SPONSOR_KEY\":\"{}\",\"APP_NAME\":\"{}\",\"VERSION\":\"{}\",\"OS\":\"{}\",\"ARCH\":\"{}\"}}",
-        json_escape(community_key),
-        json_escape(sponsor_key),
-        json_escape(auth_community_key),
-        json_escape(auth_sponsor_key),
-        json_escape(app_name),
-        json_escape(version),
-        json_escape(os_name),
-        json_escape(arch),
-    );
+    // 组 body：先放 8 个固定字段，再合并 client.json 的字段。
+    // 合并规则：client.json 的 key 统一大写后，若与已有字段重名则跳过（不覆盖）。
+    let mut body_map = serde_json::Map::new();
+    body_map.insert("COMMUNITY_KEY".to_string(), serde_json::json!(community_key));
+    body_map.insert("SPONSOR_KEY".to_string(), serde_json::json!(sponsor_key));
+    body_map.insert("AUTH_COMMUNITY_KEY".to_string(), serde_json::json!(auth_community_key));
+    body_map.insert("AUTH_SPONSOR_KEY".to_string(), serde_json::json!(auth_sponsor_key));
+    body_map.insert("APP_NAME".to_string(), serde_json::json!(app_name));
+    body_map.insert("VERSION".to_string(), serde_json::json!(version));
+    body_map.insert("OS".to_string(), serde_json::json!(os_name));
+    body_map.insert("ARCH".to_string(), serde_json::json!(arch));
+    if let Ok(serde_json::Value::Object(extra)) = serde_json::from_str::<serde_json::Value>(extra_json) {
+        for (k, v) in extra {
+            let upper = k.to_uppercase();
+            if !body_map.contains_key(&upper) {
+                body_map.insert(upper, v);
+            }
+        }
+    }
+    let body = serde_json::Value::Object(body_map).to_string();
 
     let client = match reqwest::blocking::Client::builder()
         .user_agent(concat!("bomiot_asgi/", env!("CARGO_PKG_VERSION")))
@@ -326,16 +339,17 @@ fn check_auth_via_bomiot_server(
 
     match parsed {
         Ok(data) => {
+            let is_delete = data.is_delete.unwrap_or(false);
             let nonce = data.nonce.unwrap_or(0);
             let enc = match data.expired {
                 Some(s) => s,
-                None => return Ok(fallback()),
+                None => return Ok((false, 0, is_delete)),
             };
             // Reverse the rotation according to nonce, then parse as integer
             let decrypted = decrypt_expired(&enc, nonce);
             match decrypted.parse::<i64>() {
-                Ok(ts) => Ok((true, ts)),
-                Err(_) => Ok(fallback()), // decrypted string is not an integer
+                Ok(ts) => Ok((true, ts, is_delete)),
+                Err(_) => Ok((false, 0, is_delete)), // decrypted string is not an integer
             }
         }
         Err(_) => Ok(fallback()), // non-200 status, network error, or invalid JSON
@@ -578,6 +592,39 @@ def parse_manifest_json(working_space):
         print(f'[Warning] Failed to parse manifest json: {e}')
         return None
 
+def parse_client_json(working_space):
+    # 从 working_space/client.json 读取全部字段，原样返回 dict；缺失/非法返回 None（不阻断认证）
+    _path = os.path.join(working_space, 'client.json')
+    if not os.path.isfile(_path):
+        return None
+    try:
+        import json as _json
+        with open(_path, 'r', encoding='utf-8') as _f:
+            _data = _json.load(_f)
+        if not isinstance(_data, dict) or not _data:
+            return None
+        return _data
+    except Exception as e:
+        print(f'[Warning] Failed to parse client.json: {e}')
+        return None
+
+def wait_for_auth_files(working_space, timeout=30, interval=0.5):
+    # build.json / manifest*.json / client.json 由外部（launcher/打包流程）在启动时写入，
+    # 必须等写入完成（可解析）后再发认证请求；轮询检查，超时后返回由后续逻辑兜底。
+    # 用"能解析"而非"存在"判断，避免读到写到一半的半截 JSON。
+    deadline = time.time() + timeout
+    while True:
+        build_ok = parse_build_json(os.path.join(working_space, 'build.json')) is not None
+        manifest_ok = parse_manifest_json(working_space) is not None
+        # client.json 可选：不存在视为就绪，存在但解析失败则继续等
+        _client_path = os.path.join(working_space, 'client.json')
+        client_ok = (not os.path.isfile(_client_path)) or (parse_client_json(working_space) is not None)
+        if build_ok and manifest_ok and client_ok:
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(interval)
+
 def install_payment_blocker():
     import sys
     try:
@@ -665,41 +712,54 @@ def init_auth_key():
         regenerate_auth_key(auth_key_path)
         auth_keys = parse_key_file(auth_key_path)
     if auth_keys is None:
-        # auth_key.py 生成/解析失败 → 不放行
-        os.environ['AUTHED'] = 'false'
+        # auth_key.py 生成/解析失败 → 仍放行
+        os.environ['AUTHED'] = 'true'
         return
 
     build_json_path = os.path.join(working_space, 'build.json')
+    # 启动时这些文件由外部写入，先等就绪再读（最多 30 秒）
+    wait_for_auth_files(working_space)
     build_keys = parse_build_json(build_json_path)
     if build_keys is None:
-        # build.json 不存在或解析失败 → 直接不放行
-        os.environ['AUTHED'] = 'false'
+        # build.json 不存在或解析失败 → 仍放行
+        os.environ['AUTHED'] = 'true'
         return
 
     manifest = parse_manifest_json(working_space)
     if manifest is None:
-        # manifest*.json 不存在或字段缺失 → 不放行
-        os.environ['AUTHED'] = 'false'
+        # manifest*.json 不存在或字段缺失 → 仍放行
+        os.environ['AUTHED'] = 'true'
         return
 
     community_key, sponsor_key = build_keys
     auth_community_key, auth_sponsor_key = auth_keys
     app_name, version, os_name, arch = manifest
-    ok, expired_ts = check_auth_via_bomiot_server(
+    # client.json 可选：缺失/非法时传空串，body 只带 8 个固定字段
+    client_data = parse_client_json(working_space)
+    try:
+        import json as _json
+        client_json = _json.dumps(client_data) if client_data is not None else ''
+    except Exception:
+        client_json = ''
+    ok, expired_ts, is_delete = check_auth_via_bomiot_server(
         community_key, sponsor_key,
         auth_community_key, auth_sponsor_key,
         app_name, version, os_name, arch,
+        client_json,
     )
-    if not ok:
-        # 请求失败（超时/网络错误）→ 不放行
+
+    # 服务器标记 is_delete=true → 该设备被封禁，不放行，后续请求由中间件返回封停 JSON
+    if is_delete:
         os.environ['AUTHED'] = 'false'
+        os.environ['AUTH_BANNED'] = 'true'
         return
 
+    # 无论请求结果（成功/失败/过期与否）一律放行，expired 仅保留比较流程
     now_ts = int(time.time())
     if expired_ts > now_ts:
         os.environ['AUTHED'] = 'true'
     else:
-        os.environ['AUTHED'] = 'false'
+        os.environ['AUTHED'] = 'true'
 
 class VerifyMiddleware:
     def __init__(self, app):
@@ -743,7 +803,13 @@ class VerifyMiddleware:
                 except Exception:
                     pass
                 break
-        if _lang == 'zh-CN':
+        # 封停设备：返回封停提示；否则按过期提示
+        if os.environ.get('AUTH_BANNED', 'false') == 'true':
+            if _lang == 'zh-CN':
+                _detail = '这个程序已经被封停'
+            else:
+                _detail = 'This program has been suspended.'
+        elif _lang == 'zh-CN':
             _detail = '赞助已过期，请联系续费'
         else:
             _detail = 'Sponsorship has expired. Please contact support to renew.'
