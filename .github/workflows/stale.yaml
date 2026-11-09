@@ -86,7 +86,8 @@ jobs:
           name: wheels-${{ github.job }}-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
   linux-latest:
-    runs-on: ubuntu-latest
+    # ubuntu-latest 已升级到 26.04，setup-python 尚无 3.9 包，固定 24.04
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
@@ -143,7 +144,8 @@ jobs:
           name: wheels-${{ github.job }}-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
   linux-latest-aarch64:
-    runs-on: ubuntu-latest
+    # ubuntu-latest 已升级到 26.04，setup-python 尚无 3.9 包，固定 24.04
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
